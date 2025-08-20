@@ -1,9 +1,3 @@
-/**
- * Batch Audio Transcription App
- * Handles file uploads, queue monitoring, and download management
- */
-
-// Global state
 let selectedFiles = [];
 let jobIds = [];
 let statusInterval = null;
@@ -15,7 +9,7 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 const MAX_FILES = 5;
 const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/x-ms-wma'];
 const STATUS_UPDATE_INTERVAL = 2000; // 2 seconds
-const DOWNLOAD_TIMER_DURATION = 30; // 30 seconds
+const DOWNLOAD_TIMER_DURATION = 60 * 60; // 1 hour (3600 seconds) - matches backend cleanup timing
 
 /**
  * DOM Elements Cache
@@ -88,6 +82,29 @@ const Utils = {
         const sizes = ['Bytes', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    },
+
+    /**
+     * Format time duration in human readable format
+     */
+    formatTime(seconds) {
+        if (seconds < 60) {
+            return `${seconds}s`;
+        } else if (seconds < 3600) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+        } else {
+            const hours = Math.floor(seconds / 3600);
+            const remainingMinutes = Math.floor((seconds % 3600) / 60);
+            const remainingSeconds = seconds % 60;
+            
+            let timeStr = `${hours}h`;
+            if (remainingMinutes > 0) timeStr += ` ${remainingMinutes}m`;
+            if (remainingSeconds > 0 && hours === 0) timeStr += ` ${remainingSeconds}s`;
+            
+            return timeStr;
+        }
     },
 
     /**
@@ -433,7 +450,7 @@ const DownloadManager = {
      * Start download countdown timer
      */
     startTimer(jobId) {
-        let timeLeft = DOWNLOAD_TIMER_DURATION;
+        let timeLeft = DOWNLOAD_TIMER_DURATION; // Now 1 hour (3600 seconds)
         downloadTimers[jobId] = timeLeft;
         
         const timerInterval = setInterval(() => {
@@ -458,13 +475,25 @@ const DownloadManager = {
     },
 
     _updateTimerDisplay(timeLeft, timerText, downloadBtn) {
-        timerText.textContent = `Auto-expires in ${timeLeft}s`;
-        timerText.style.color = timeLeft <= 10 ? '#e53e3e' : '#718096';
+        const formattedTime = Utils.formatTime(timeLeft);
+        timerText.textContent = `Auto-expires in ${formattedTime}`;
         
-        // Change button color when time is running low
-        if (timeLeft <= 10) {
+        // Change colors based on time remaining
+        if (timeLeft <= 300) { // 5 minutes or less - red warning
+            timerText.style.color = '#e53e3e';
             downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
-            downloadBtn.innerHTML = `⚠️ Download SRT (${timeLeft}s)`;
+            downloadBtn.innerHTML = `⚠️ Download SRT (${formattedTime})`;
+        } else if (timeLeft <= 600) { // 10 minutes or less - orange warning
+            timerText.style.color = '#d69e2e';
+            downloadBtn.style.background = 'linear-gradient(135deg, #ed8936, #d69e2e)';
+            downloadBtn.innerHTML = `⏰ Download SRT (${formattedTime})`;
+        } else if (timeLeft <= 1800) { // 30 minutes or less - yellow caution
+            timerText.style.color = '#b7791f';
+            timerText.textContent = `Expires in ${formattedTime}`;
+        } else {
+            // More than 30 minutes - normal state
+            timerText.style.color = '#718096';
+            timerText.textContent = `Available for ${formattedTime}`;
         }
     },
 
@@ -478,7 +507,7 @@ const DownloadManager = {
                     🕒 Download Expired
                 </div>
                 <div style="color: #9c4221; font-size: 12px;">
-                    File has been automatically deleted from server
+                    File has been automatically deleted from server (after 1 hour)
                 </div>
             </div>
         `;
@@ -512,7 +541,9 @@ const DownloadManager = {
         // Show download initiated message
         const timerText = document.getElementById(`timer-text-${jobId}`);
         if (timerText) {
-            timerText.textContent = 'Download initiated - file will expire soon';
+            const timeLeft = downloadTimers[jobId];
+            const formattedTime = Utils.formatTime(timeLeft);
+            timerText.textContent = `Download initiated - expires in ${formattedTime}`;
             timerText.style.color = '#38a169';
         }
     }
