@@ -57,17 +57,9 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             model='gemini-2.5-flash',
             config=types.GenerateContentConfig(
                 system_instruction='''
-                Your main task is to transcribe an audio into srt format. You will be given a mp3 audio file about a dialogue of a series/drama, then understand the dialogue and give the most precise transcription of the audio. The output format contain the number, the timeline of the text to be occur (time starts and time ends in hours:minutes:seconds,miliseconds) and the actual text should be like this, make the time to be as precise as possible with the audio
-                    1
-                    00:00:00,000 --> 00:00:00,000
-                    Assalamualaikum warahmatullahi wabarakatuh
-
-                No need to mention who's speaking but separate each text based on the speaker. The emotions are not demanded on the transcription so you may ignore it. If you detect any background sound/music, then you may add square brackets to indicate it's not a speech/dialogue by someone.
-                    22
-                    00:02:07,000 --> 00:02:08,000
-                    [Fearful whimpering]
-
-                You are not required to thinking outside the dialogue. It's better to be accurate than be creative.
+                Transcribe the provided audio into SRT format with proper timestamps.
+                Ensure the output is in valid SRT format with correct numbering and timestamps.
+                Do not include any additional text or explanations.
                 ''',
                 thinking_config=types.ThinkingConfig(thinking_budget=-1)
             ),
