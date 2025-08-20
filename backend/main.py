@@ -54,7 +54,7 @@ def process_audio_file(job_id, upload_path, output_path, filename):
         
         # Call Gemini for transcription
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.5-pro',
             config=types.GenerateContentConfig(
                 system_instruction='''
                 Please transcribe the provided audio into proper SRT format. You may use this example as a guide:
