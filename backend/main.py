@@ -57,14 +57,87 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             model='gemini-2.5-flash',
             config=types.GenerateContentConfig(
                 system_instruction='''
-                Transcribe the provided audio into SRT format with proper timestamps.
-                Ensure the output is in valid SRT format with correct numbering and timestamps.
-                Do not include any additional text or explanations.
+                Please transcribe the provided audio into proper SRT format. You may use this example as a guide:
+                1
+                00:00:01,000 --> 00:00:05,000
+                Hello, this is an example of SRT format.
+
+                or just like this : 
+                1
+                00:00:20,534 --> 00:00:24,244
+                Assalamualaikum warahmatullahi wabarakatuh.
+
+                2
+                00:00:24,714 --> 00:00:28,324
+                Waalaikumsalam warahmatullahi wabarakatuh.
+
+                3
+                00:00:44,064 --> 00:00:45,694
+                By the way, abis ini kalian mau lanjut ke mana?
+
+                4
+                00:00:46,244 --> 00:00:48,344
+                Kalau gue sih mau lanjutin ke UI ya, rencananya.
+
+                5
+                00:00:48,824 --> 00:00:51,194
+                Wow. Uh. Kalau gue mau ke ITB.
+
+                6
+                00:00:52,994 --> 00:00:54,084
+                Kalau lu, lanjut ke mana?
+
+                7
+                00:00:54,344 --> 00:00:58,684
+                Gue sih belum tahu ya mau ke mana, tapi gue pengen ngambil bisnis manajemen supaya gue bisa ngelanjutin usaha bokap.
+
+                8
+                00:00:58,954 --> 00:01:00,774
+                Keren keren. Keren ya. Keren.
+
+                9
+                00:01:02,174 --> 00:01:04,264
+                Ton. Lu mau lanjut kuliah ke mana?
+
+                Don't make this kind of mistake, always ensure that the timecodes are correct and the text is properly formatted.
+                8
+                00:00:58,954 --> 01:00:44,084
+                Keren-keren ya? Keren-keren ya?
+                There's no way that from 58 seconds to 1 hour and 44 seconds, there is no way that the text is still the same.
+                You need to break it down into smaller segments. Please always remember that the miliseconds should contain 3 digits.
+
+                and this one:
+                110
+                00:09:59,260 --> 01:00:21,290
+                Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
+
+                So, the timecode is wrong, it should be 00:09:59,260 --> 00:10:21,290
+
+                Ensure that there's no timecode mistake like this:
+                98
+                00:06:57,284 --> 00:06:57,844
+                Apapun.
+
+                99
+                07:07:27,510 --> 07:07:31,810
+                Bapak, Bapak, Nak.
+                
+                There's no way that from 6 minutes and 57 seconds jump to 7 hours and 7 minutes. it should be 00:07:27,510 --> 00:07:31,810
+                And this one : 
+                119
+                00:08:58,450 --> 00:08:59,000
+                Bapak janji.
+
+                120
+                01:00:19,260 --> 01:00:21,290
+                Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
+                There's no way that from 8 minutes and 58 seconds jump to 1 hour and 0 minutes, it should be 00:08:58,450 --> 00:08:59,000
+
+                Once again, timecodes should be in the format of HH:MM:SS,mmm where mmm is milliseconds.
                 ''',
                 thinking_config=types.ThinkingConfig(thinking_budget=-1)
             ),
             contents=[
-                "Transcribe this dialogue into proper SRT format with timestamps.",
                 types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
             ]
         )
