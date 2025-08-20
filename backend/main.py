@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import mimetypes
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -10,6 +11,8 @@ import time
 from datetime import datetime
 import uuid
 
+load_dotenv()
+
 app = Flask(__name__)
 CORS(app)
 
@@ -18,8 +21,9 @@ OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+api_key = os.getenv("GOOGLE_API_KEY")
 # Initialize Gemini client
-client = genai.Client(api_key="AIzaSyBDJV17nCdlarZiiooDbI2cbGI3JpmG7WA")
+client = genai.Client(api_key=api_key)
 
 # Queue system
 processing_queue = queue.Queue()
