@@ -1,43 +1,55 @@
 1
-00:00:00,536 --> 00:02,896
-Halo semuanya, kami dari tim Nutri Go dan inilah ide kami.
+00:00:00,564 --> 00:03,004
+Halo semuanya, kami dari tim NutriGo and inilah ide kami.
 
 2
-00:03,326 --> 00:08,016
+00:03,454 --> 00:08,024
 Kami memiliki ide untuk menyelesaikan mengenai masalah obesitas dan juga food waste di UMKM.
 
 3
-00:08,276 --> 00:10,036
+00:08,574 --> 00:10,034
 Bagaimana cara menyelesaikannya?
 
 4
-00:10,236 --> 00:16,636
+00:10,234 --> 00:16,574
 Ide kami adalah dengan cara membuat sebuah aplikasi di mana UMKM dapat menjual surplus-surplus food mereka.
 
 5
-00:16,846 --> 00:21,806
+00:16,774 --> 00:21,794
 Dan sebagai customer, kita dapat membeli makanan mereka dan juga dapat melakukan konsultasi dengan chatbot
 
 6
-00:22,196 --> 00:25,726
+00:22,174 --> 00:25,584
 mengenai nutrisi pada makanan dan juga gaya hidup yang lebih sehat lagi.
 
 7
-00:25,936 --> 00:36,196
-Kemudian customer juga dapat melakukan foto pada makanan mereka dan kemudian AI akan memberikan feedback mengenai jumlah nutrisi yang ada pada makanan tersebut.
+00:25,784 --> 00:32,954
+Kemudian, customer juga dapat melakukan foto pada makanan mereka
 
 8
-00:36,656 --> 00:44,526
-Kemudian dari sini, kita berharap supaya benefitnya bagi para customer, mereka dapat meningkatkan gaya hidup mereka menjadi lebih sehat.
+00:32,954 --> 00:36,134
+dan kemudian AI akan memberikan feedback mengenai jumlah nutrisi yang ada pada makanan tersebut.
 
 9
-00:44,527 --> 00:51,576
-Dan juga untuk UMKM supaya mereka dapat meningkatkan eh daya jual dari mereka sendiri.
+00:36,544 --> 00:40,944
+Kemudian dari sini kita berharap supaya benefit-nya bagi para customer,
 
 10
-00:52,066 --> 00:54,716
-Dan itulah solusi yang ingin kami tawarkan.
+00:40,944 --> 00:44,574
+mereka dapat meningkatkan gaya hidup mereka menjadi lebih sehat.
 
 11
-00:54,806 --> 00:56,336
-Dari ide kami. Terima kasih.
+00:44,694 --> 00:48,784
+Dan juga untuk UMKM supaya mereka dapat meningkatkan
+
+12
+00:48,784 --> 00:51,554
+daya jual dari mereka sendiri.
+
+13
+00:51,964 --> 00:54,714
+Dan itulah solusi yang ingin kami tawarkan dari ide kami.
+
+14
+00:54,954 --> 00:56,334
+Terima kasih.
