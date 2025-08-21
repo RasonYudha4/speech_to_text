@@ -400,27 +400,27 @@ def get_all_status():
 
 @app.route('/outputs/<path:filename>')
 def serve_srt(filename):
-    """Serve SRT file with improved cleanup handling"""
     file_path = os.path.join(OUTPUT_FOLDER, filename)
-    
-    if not os.path.exists(file_path):
-        return jsonify({"error": "File not found or has expired"}), 404
     
     # Schedule cleanup of the SRT file after serving
     def cleanup_after_delay():
-        time.sleep(3600)  # Wait 1 hour before cleanup
+        time.sleep(30)  # Wait 30 seconds to ensure download completes
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"Auto-deleted SRT file after 1 hour: {file_path}")
+                print(f"Auto-deleted SRT file: {file_path}")
                 
-                # Mark job as expired in processing status (don't remove completely yet)
+                # Also remove from processing status
                 with processing_lock:
+                    job_to_remove = None
                     for job_id, status in processing_status.items():
                         if status.get('output_path') == file_path:
-                            status['file_expired'] = True
-                            status['expired_at'] = datetime.now()
+                            job_to_remove = job_id
                             break
+                    
+                    if job_to_remove:
+                        del processing_status[job_to_remove]
+                        print(f"Removed job {job_to_remove} from status tracking")
                         
         except Exception as e:
             print(f"Error cleaning up SRT file {file_path}: {e}")
