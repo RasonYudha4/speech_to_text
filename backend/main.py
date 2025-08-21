@@ -8,7 +8,7 @@ from google.genai import types
 import threading
 import queue
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import uuid
 
 load_dotenv()
@@ -38,7 +38,6 @@ STATUS_PROCESSING = "processing"
 STATUS_COMPLETED = "completed"
 STATUS_ERROR = "error"
 STATUS_CORRECTING = "correcting"
-STATUS_WAITING_DELAY = "waiting_delay"
 
 def correct_transcript(raw_transcript):
     """Use the corrector client to fix transcription issues"""
@@ -250,52 +249,25 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             processing_status[job_id]['completed_at'] = datetime.now()
 
 def queue_worker():
-    """Background worker to process queued files with delay between jobs"""
-    last_job_completed = None
-    
+    """Background worker to process queued files"""
     while True:
         try:
             job_data = processing_queue.get(timeout=1)
             if job_data is None:  # Shutdown signal
                 break
                 
-            # If this isn't the first job and we just completed one, wait 2 minutes
-            if last_job_completed is not None:
-                time_since_last = time.time() - last_job_completed
-                delay_needed = 120  # 2 minutes in seconds
-                
-                if time_since_last < delay_needed:
-                    wait_time = delay_needed - time_since_last
-                    print(f"Waiting {wait_time:.1f} seconds before processing next job...")
-                    
-                    # Update status to show we're in delay period
-                    job_id = job_data['job_id']
-                    with processing_lock:
-                        if job_id in processing_status:
-                            processing_status[job_id]['status'] = 'waiting_delay'
-                            processing_status[job_id]['delay_until'] = datetime.now() + timedelta(seconds=wait_time)
-                    
-                    time.sleep(wait_time)
-            
             job_id = job_data['job_id']
             upload_path = job_data['upload_path']
             output_path = job_data['output_path']
             filename = job_data['filename']
             
-            print(f"Starting to process job {job_id}: {filename}")
             process_audio_file(job_id, upload_path, output_path, filename)
-            
-            # Record completion time for next delay calculation
-            last_job_completed = time.time()
-            
             processing_queue.task_done()
             
         except queue.Empty:
             continue
         except Exception as e:
             print(f"Queue worker error: {e}")
-            # Still record completion time even on error to maintain delay
-            last_job_completed = time.time()
 
 # Start background worker thread
 worker_thread = threading.Thread(target=queue_worker, daemon=True)
@@ -380,7 +352,7 @@ def get_job_status(job_id):
         status_data = processing_status[job_id].copy()
     
     # Convert datetime objects to strings
-    for key in ['queued_at', 'started_at', 'completed_at', 'delay_until', 'correction_started_at']:
+    for key in ['queued_at', 'started_at', 'completed_at']:
         if key in status_data and status_data[key]:
             status_data[key] = status_data[key].isoformat()
     
@@ -394,7 +366,7 @@ def get_all_status():
         for job_id, status in processing_status.items():
             status_copy = status.copy()
             # Convert datetime objects to strings
-            for key in ['queued_at', 'started_at', 'completed_at', 'delay_until', 'correction_started_at']:
+            for key in ['queued_at', 'started_at', 'completed_at']:
                 if key in status_copy and status_copy[key]:
                     status_copy[key] = status_copy[key].isoformat()
             all_status[job_id] = status_copy
@@ -440,8 +412,6 @@ def queue_info():
     with processing_lock:
         queued_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_QUEUED)
         processing_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_PROCESSING)
-        waiting_delay_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_WAITING_DELAY)
-        correcting_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_CORRECTING)
         completed_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_COMPLETED)
         error_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_ERROR)
     
@@ -449,8 +419,6 @@ def queue_info():
         "queue_size": processing_queue.qsize(),
         "queued": queued_count,
         "processing": processing_count,
-        "waiting_delay": waiting_delay_count,
-        "correcting": correcting_count,
         "completed": completed_count,
         "error": error_count
     })

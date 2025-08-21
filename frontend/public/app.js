@@ -393,34 +393,13 @@ const JobList = {
     update(statuses) {
         const jobList = document.getElementById('jobList');
         
-        // Check for status changes BEFORE updating allJobs
-        this._handleStatusChanges(statuses);
-        
         // Don't clear existing jobs, instead update them intelligently
         this._updateExistingJobs(statuses);
         this._addNewJobs(statuses, jobList);
-    },
-
-    /**
-     * Handle status changes and trigger appropriate actions
-     */
-    _handleStatusChanges(newStatuses) {
-        Object.entries(newStatuses).forEach(([jobId, newStatus]) => {
-            const oldStatus = allJobs[jobId];
-            
-            // Check if job just completed (transition from any status to completed)
-            if (oldStatus && oldStatus.status !== 'completed' && 
-                newStatus.status === 'completed' && newStatus.srt_url) {
-                
-                console.log(`Job ${jobId} just completed! Starting download timer...`);
-                
-                // Clear any existing timer first
-                if (downloadTimers[jobId] && downloadTimers[jobId].interval) {
-                    clearInterval(downloadTimers[jobId].interval);
-                    delete downloadTimers[jobId];
-                }
-                
-                // Start fresh download timer for newly completed job
+        
+        // Start timers for newly completed jobs
+        Object.entries(statuses).forEach(([jobId, status]) => {
+            if (status.status === 'completed' && status.srt_url && !downloadTimers[jobId]) {
                 DownloadManager.startTimer(jobId);
             }
         });
@@ -444,12 +423,6 @@ const JobList = {
                 // Add new job
                 const jobItem = this._createJobItem(jobId, status);
                 jobList.appendChild(jobItem);
-                
-                // Start timer immediately if it's already completed when first discovered
-                if (status.status === 'completed' && status.srt_url && !downloadTimers[jobId]) {
-                    console.log(`New job ${jobId} is already completed, starting timer...`);
-                    DownloadManager.startTimer(jobId);
-                }
             }
         });
 
