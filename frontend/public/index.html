@@ -1,23 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Audio Transcription</title>
+  <title>Batch Audio Transcription</title>
   <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="dashboard">
     <div class="header">
-        <h1>Audio Transcription</h1>
-        <p>Upload an audio file for transcription</p>
+        <h1>Batch Audio Transcription</h1>
+        <p>Upload up to 5 audio files for batch processing</p>
     </div>
 
     <form id="uploadForm">
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon" id="uploadIcon">🎵</div>
-            <div class="upload-text" id="uploadText">Drop your audio file here</div>
-            <div class="upload-subtext" id="uploadSubtext">or click to browse (one file at a time)</div>
-            <input type="file" id="fileInput" class="fileInput" accept="audio/*">
+            <div class="upload-text" id="uploadText">Drop your audio files here</div>
+            <div class="upload-subtext" id="uploadSubtext">or click to browse (max 5 files)</div>
+            <input type="file" id="fileInput" class="fileInput" accept="audio/*" multiple>
         </div>
         
         <div class="file-list" id="fileList">
@@ -36,18 +36,15 @@
         <div class="error-message" id="errorMessage"></div>
 
         <button type="submit" class="submit-btn" id="submitBtn" disabled>
-            Start Processing
+            Start Batch Processing
         </button>
     </form>
 
-    <!-- Processing Status -->
+    <!-- Queue Status -->
     <div class="queue-status" id="queueStatus">
         <div class="queue-header">
-            <div class="queue-title">Processing Status</div>
-            <div class="queue-actions">
-                <button class="refresh-btn" id="refreshBtn">Refresh</button>
-                <button class="clear-btn" onclick="clearCompleted()">Clear Completed</button>
-            </div>
+            <div class="queue-title">Processing Queue</div>
+            <button class="refresh-btn" id="refreshBtn">Refresh</button>
         </div>
         
         <div class="queue-stats">
