@@ -360,42 +360,67 @@ def get_job_status(job_id):
 
 @app.route('/status')
 def get_all_status():
-    """Get status of all jobs"""
+    """Get status of all jobs - FIXED to maintain completed jobs"""
     with processing_lock:
         all_status = {}
+        current_time = datetime.now()
+        
         for job_id, status in processing_status.items():
             status_copy = status.copy()
+            
             # Convert datetime objects to strings
-            for key in ['queued_at', 'started_at', 'completed_at']:
+            for key in ['queued_at', 'started_at', 'completed_at', 'correction_started_at']:
                 if key in status_copy and status_copy[key]:
                     status_copy[key] = status_copy[key].isoformat()
+            
+            # For completed jobs, ensure SRT URL is available
+            if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('output_path'):
+                output_path = status['output_path']  # Use original status for file check
+                if os.path.exists(output_path):
+                    # File still exists, keep the job in status
+                    output_filename = os.path.basename(output_path)
+                    status_copy['srt_url'] = f"/outputs/{output_filename}"
+                    status_copy['file_available'] = True
+                else:
+                    # File was deleted, mark as expired but keep in status briefly
+                    status_copy['file_available'] = False
+                    status_copy['expired'] = True
+            
+            # Add download expiry information for completed jobs
+            if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('completed_at'):
+                completed_time = datetime.fromisoformat(status_copy['completed_at'].replace('Z', '+00:00').replace('+00:00', ''))
+                time_since_completion = (current_time - completed_time).total_seconds()
+                download_expires_in = max(0, 3600 - time_since_completion)  # 1 hour = 3600 seconds
+                status_copy['download_expires_in'] = int(download_expires_in)
+                status_copy['download_expired'] = download_expires_in <= 0
+            
             all_status[job_id] = status_copy
     
     return jsonify(all_status)
 
 @app.route('/outputs/<path:filename>')
 def serve_srt(filename):
+    """Serve SRT file with improved cleanup handling"""
     file_path = os.path.join(OUTPUT_FOLDER, filename)
+    
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found or has expired"}), 404
     
     # Schedule cleanup of the SRT file after serving
     def cleanup_after_delay():
-        time.sleep(30)  # Wait 30 seconds to ensure download completes
+        time.sleep(3600)  # Wait 1 hour before cleanup
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"Auto-deleted SRT file: {file_path}")
+                print(f"Auto-deleted SRT file after 1 hour: {file_path}")
                 
-                # Also remove from processing status
+                # Mark job as expired in processing status (don't remove completely yet)
                 with processing_lock:
-                    job_to_remove = None
                     for job_id, status in processing_status.items():
                         if status.get('output_path') == file_path:
-                            job_to_remove = job_id
+                            status['file_expired'] = True
+                            status['expired_at'] = datetime.now()
                             break
-                    
-                    if job_to_remove:
-                        del processing_status[job_to_remove]
-                        print(f"Removed job {job_to_remove} from status tracking")
                         
         except Exception as e:
             print(f"Error cleaning up SRT file {file_path}: {e}")

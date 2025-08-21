@@ -310,7 +310,7 @@ const UploadHandler = {
 };
 
 /**
- * Status Monitor
+ * Status Monitor - FIXED VERSION
  */
 const StatusMonitor = {
     /**
@@ -351,8 +351,8 @@ const StatusMonitor = {
             const statusResponse = await axios.get(`${API_BASE_URL}/status`);
             const newStatuses = statusResponse.data;
             
-            // Merge new statuses with existing jobs (don't replace, merge)
-            allJobs = { ...allJobs, ...newStatuses };
+            // FIXED: Properly merge statuses without overwriting completed jobs
+            this._mergeStatuses(newStatuses);
             
             JobList.update(allJobs);
             
@@ -365,6 +365,88 @@ const StatusMonitor = {
         } catch (error) {
             console.error('Error updating status:', error);
         }
+    },
+
+    /**
+     * FIXED: Properly merge new statuses with existing ones
+     */
+    _mergeStatuses(newStatuses) {
+        Object.entries(newStatuses).forEach(([jobId, newStatus]) => {
+            const existingStatus = allJobs[jobId];
+            
+            if (!existingStatus) {
+                // New job - add it
+                allJobs[jobId] = newStatus;
+            } else {
+                // Existing job - only update if the new status is more recent or different
+                const shouldUpdate = this._shouldUpdateStatus(existingStatus, newStatus);
+                
+                if (shouldUpdate) {
+                    // Preserve important fields that shouldn't be overwritten
+                    const preservedFields = {};
+                    
+                    // Preserve download timer state if job was previously completed
+                    if (existingStatus.status === 'completed' && 
+                        newStatus.status === 'completed' && 
+                        downloadTimers[jobId]) {
+                        // Don't reset completed jobs that already have download timers
+                        preservedFields.download_timer_active = true;
+                    }
+                    
+                    // Update the status while preserving important fields
+                    allJobs[jobId] = { ...newStatus, ...preservedFields };
+                }
+            }
+        });
+        
+        // Remove jobs that are no longer in the server response and are old
+        const currentTime = new Date();
+        Object.keys(allJobs).forEach(jobId => {
+            if (!newStatuses[jobId]) {
+                const job = allJobs[jobId];
+                // Only remove if job is older than 2 hours and not currently downloading
+                if (job.completed_at) {
+                    const completedTime = new Date(job.completed_at);
+                    const hoursDiff = (currentTime - completedTime) / (1000 * 60 * 60);
+                    
+                    // Remove if older than 2 hours and no active download timer
+                    if (hoursDiff > 2 && !downloadTimers[jobId]) {
+                        delete allJobs[jobId];
+                    }
+                }
+            }
+        });
+    },
+
+    /**
+     * Determine if an existing status should be updated with new status
+     */
+    _shouldUpdateStatus(existingStatus, newStatus) {
+        // Always update if status changed
+        if (existingStatus.status !== newStatus.status) {
+            return true;
+        }
+        
+        // Update if new status has more recent timestamp
+        if (newStatus.completed_at && existingStatus.completed_at) {
+            const newTime = new Date(newStatus.completed_at);
+            const existingTime = new Date(existingStatus.completed_at);
+            return newTime > existingTime;
+        }
+        
+        // Update if new status has started_at but existing doesn't
+        if (newStatus.started_at && !existingStatus.started_at) {
+            return true;
+        }
+        
+        // Don't update completed jobs that already have download URLs
+        if (existingStatus.status === 'completed' && 
+            existingStatus.srt_url && 
+            newStatus.status === 'completed') {
+            return false;
+        }
+        
+        return true;
     },
 
     /**
