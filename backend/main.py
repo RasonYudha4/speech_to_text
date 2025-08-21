@@ -5,8 +5,6 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from google import genai
 from google.genai import types
-import threading
-import queue
 import time
 from datetime import datetime
 import uuid
@@ -27,13 +25,10 @@ api_key2 = os.getenv("GOOGLE_API_KEY2")
 client = genai.Client(api_key=api_key1)
 corrector = genai.Client(api_key=api_key2)
 
-# Queue system
-processing_queue = queue.Queue()
-processing_status = {}  # job_id -> status info
-processing_lock = threading.Lock()
+# Simple processing status storage - no queue needed
+processing_status = {}
 
 # Status constants
-STATUS_QUEUED = "queued"
 STATUS_PROCESSING = "processing"
 STATUS_COMPLETED = "completed"
 STATUS_ERROR = "error"
@@ -94,9 +89,8 @@ def correct_transcript(raw_transcript):
 
 def process_audio_file(job_id, upload_path, output_path, filename):
     """Process a single audio file with correction"""
-    with processing_lock:
-        processing_status[job_id]['status'] = STATUS_PROCESSING
-        processing_status[job_id]['started_at'] = datetime.now()
+    processing_status[job_id]['status'] = STATUS_PROCESSING
+    processing_status[job_id]['started_at'] = datetime.now()
     
     try:
         # Detect MIME type
@@ -205,9 +199,8 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             raise Exception("No transcript text returned")
         
         # Update status to correcting
-        with processing_lock:
-            processing_status[job_id]['status'] = STATUS_CORRECTING
-            processing_status[job_id]['correction_started_at'] = datetime.now()
+        processing_status[job_id]['status'] = STATUS_CORRECTING
+        processing_status[job_id]['correction_started_at'] = datetime.now()
         
         # Use corrector to fix transcription issues
         print(f"Starting correction for job {job_id}")
@@ -228,12 +221,11 @@ def process_audio_file(job_id, upload_path, output_path, filename):
         output_filename = os.path.basename(output_path)
         
         # Update status
-        with processing_lock:
-            processing_status[job_id]['status'] = STATUS_COMPLETED
-            processing_status[job_id]['completed_at'] = datetime.now()
-            processing_status[job_id]['srt_url'] = f"/outputs/{output_filename}"
-            processing_status[job_id]['output_path'] = output_path  # Store for cleanup
-            processing_status[job_id]['correction_completed'] = True
+        processing_status[job_id]['status'] = STATUS_COMPLETED
+        processing_status[job_id]['completed_at'] = datetime.now()
+        processing_status[job_id]['srt_url'] = f"/outputs/{output_filename}"
+        processing_status[job_id]['output_path'] = output_path
+        processing_status[job_id]['correction_completed'] = True
             
     except Exception as e:
         # Clean up upload file on error
@@ -243,215 +235,131 @@ def process_audio_file(job_id, upload_path, output_path, filename):
         except:
             pass
             
-        with processing_lock:
-            processing_status[job_id]['status'] = STATUS_ERROR
-            processing_status[job_id]['error'] = str(e)
-            processing_status[job_id]['completed_at'] = datetime.now()
-
-def queue_worker():
-    """Background worker to process queued files"""
-    while True:
-        try:
-            job_data = processing_queue.get(timeout=1)
-            if job_data is None:  # Shutdown signal
-                break
-                
-            job_id = job_data['job_id']
-            upload_path = job_data['upload_path']
-            output_path = job_data['output_path']
-            filename = job_data['filename']
-            
-            process_audio_file(job_id, upload_path, output_path, filename)
-            processing_queue.task_done()
-            
-        except queue.Empty:
-            continue
-        except Exception as e:
-            print(f"Queue worker error: {e}")
-
-# Start background worker thread
-worker_thread = threading.Thread(target=queue_worker, daemon=True)
-worker_thread.start()
+        processing_status[job_id]['status'] = STATUS_ERROR
+        processing_status[job_id]['error'] = str(e)
+        processing_status[job_id]['completed_at'] = datetime.now()
 
 @app.route('/upload', methods=['POST'])
-def upload_files():
-    if 'files' not in request.files:
-        return jsonify({"error": "No files part"}), 400
+def upload_file():
+    """Handle single file upload and immediate processing"""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
     
-    files = request.files.getlist('files')
-    custom_names = request.form.getlist('filenames')  # Array of custom names
+    file = request.files['file']
+    custom_name = request.form.get('filename', '').strip()
     
-    if not files or len(files) == 0:
-        return jsonify({"error": "No files provided"}), 400
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
     
-    if len(files) > 5:
-        return jsonify({"error": "Maximum 5 files allowed"}), 400
+    # Generate unique job ID
+    job_id = str(uuid.uuid4())
     
-    job_ids = []
+    # Use custom filename if provided
+    if custom_name:
+        base_name = os.path.splitext(custom_name)[0]
+    else:
+        base_name = os.path.splitext(file.filename)[0]
     
-    for i, file in enumerate(files):
-        if file.filename == '':
-            continue
-            
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())
-        
-        # Use custom filename if provided
-        custom_name = custom_names[i] if i < len(custom_names) and custom_names[i] else None
-        if custom_name:
-            base_name = os.path.splitext(custom_name)[0]
-        else:
-            base_name = os.path.splitext(file.filename)[0]
-        
-        # Ensure safe filename
-        safe_name = base_name.replace(" ", "_")
-        file_ext = os.path.splitext(file.filename)[1]
-        upload_filename = f"{job_id}_{safe_name}{file_ext}"
-        upload_path = os.path.join(UPLOAD_FOLDER, upload_filename)
-        
-        # Save uploaded file
-        file.save(upload_path)
-        
-        # Prepare output path - use the safe_name which is either custom or original
-        output_filename = f"{safe_name}.srt"
-        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-        
-        # Initialize job status
-        with processing_lock:
-            processing_status[job_id] = {
-                'status': STATUS_QUEUED,
-                'filename': file.filename,
-                'custom_name': custom_name,
-                'safe_name': safe_name,
-                'queued_at': datetime.now(),
-                'file_size': os.path.getsize(upload_path)
-            }
-        
-        # Add to processing queue
-        processing_queue.put({
-            'job_id': job_id,
-            'upload_path': upload_path,
-            'output_path': output_path,
-            'filename': file.filename
+    # Ensure safe filename
+    safe_name = base_name.replace(" ", "_")
+    file_ext = os.path.splitext(file.filename)[1]
+    upload_filename = f"{job_id}_{safe_name}{file_ext}"
+    upload_path = os.path.join(UPLOAD_FOLDER, upload_filename)
+    
+    # Save uploaded file
+    file.save(upload_path)
+    
+    # Prepare output path
+    output_filename = f"{safe_name}.srt"
+    output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+    
+    # Initialize job status
+    processing_status[job_id] = {
+        'status': STATUS_PROCESSING,
+        'filename': file.filename,
+        'custom_name': custom_name,
+        'safe_name': safe_name,
+        'started_at': datetime.now(),
+        'file_size': os.path.getsize(upload_path)
+    }
+    
+    # Process file immediately (synchronously)
+    try:
+        process_audio_file(job_id, upload_path, output_path, file.filename)
+        return jsonify({
+            "message": "File processed successfully",
+            "job_id": job_id,
+            "status": processing_status[job_id]['status']
         })
-        
-        job_ids.append(job_id)
-    
-    return jsonify({
-        "message": f"Successfully queued {len(job_ids)} files for processing",
-        "job_ids": job_ids
-    })
+    except Exception as e:
+        return jsonify({"error": f"Processing failed: {str(e)}"}), 500
 
 @app.route('/status/<job_id>')
 def get_job_status(job_id):
     """Get status of a specific job"""
-    with processing_lock:
-        if job_id not in processing_status:
-            return jsonify({"error": "Job not found"}), 404
-        
-        status_data = processing_status[job_id].copy()
+    if job_id not in processing_status:
+        return jsonify({"error": "Job not found"}), 404
     
+    status_data = processing_status[job_id].copy()
+
     # Convert datetime objects to strings
-    for key in ['queued_at', 'started_at', 'completed_at']:
+    for key in ['started_at', 'completed_at', 'correction_started_at']:
         if key in status_data and status_data[key]:
             status_data[key] = status_data[key].isoformat()
-    
+
     return jsonify(status_data)
 
 @app.route('/status')
 def get_all_status():
-    """Get status of all jobs - FIXED to maintain completed jobs"""
-    with processing_lock:
-        all_status = {}
-        current_time = datetime.now()
-        
-        for job_id, status in processing_status.items():
-            status_copy = status.copy()
-            
-            # Convert datetime objects to strings
-            for key in ['queued_at', 'started_at', 'completed_at', 'correction_started_at']:
-                if key in status_copy and status_copy[key]:
-                    status_copy[key] = status_copy[key].isoformat()
-            
-            # For completed jobs, ensure SRT URL is available
-            if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('output_path'):
-                output_path = status['output_path']  # Use original status for file check
-                if os.path.exists(output_path):
-                    # File still exists, keep the job in status
-                    output_filename = os.path.basename(output_path)
-                    status_copy['srt_url'] = f"/outputs/{output_filename}"
-                    status_copy['file_available'] = True
-                else:
-                    # File was deleted, mark as expired but keep in status briefly
-                    status_copy['file_available'] = False
-                    status_copy['expired'] = True
-            
-            # Add download expiry information for completed jobs
-            if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('completed_at'):
-                completed_time = datetime.fromisoformat(status_copy['completed_at'].replace('Z', '+00:00').replace('+00:00', ''))
-                time_since_completion = (current_time - completed_time).total_seconds()
-                download_expires_in = max(0, 3600 - time_since_completion)  # 1 hour = 3600 seconds
-                status_copy['download_expires_in'] = int(download_expires_in)
-                status_copy['download_expired'] = download_expires_in <= 0
-            
-            all_status[job_id] = status_copy
+    """Get status of all jobs"""
+    all_status = {}
+    current_time = datetime.now()
     
+    for job_id, status in processing_status.items():
+        status_copy = status.copy()
+        
+        # Convert datetime objects to strings
+        for key in ['started_at', 'completed_at', 'correction_started_at']:
+            if key in status_copy and status_copy[key]:
+                status_copy[key] = status_copy[key].isoformat()
+        
+        # For completed jobs, ensure SRT URL is available
+        if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('output_path'):
+            output_path = status['output_path']
+            if os.path.exists(output_path):
+                output_filename = os.path.basename(output_path)
+                status_copy['srt_url'] = f"/outputs/{output_filename}"
+                status_copy['file_available'] = True
+            else:
+                status_copy['file_available'] = False
+                status_copy['expired'] = True
+        
+        # Add download expiry information for completed jobs
+        if status_copy.get('status') == STATUS_COMPLETED and status_copy.get('completed_at'):
+            completed_time = datetime.fromisoformat(status_copy['completed_at'].replace('Z', '+00:00').replace('+00:00', ''))
+            time_since_completion = (current_time - completed_time).total_seconds()
+            download_expires_in = max(0, 3600 - time_since_completion)
+            status_copy['download_expires_in'] = int(download_expires_in)
+            status_copy['download_expired'] = download_expires_in <= 0
+        
+        all_status[job_id] = status_copy
+
     return jsonify(all_status)
 
 @app.route('/outputs/<path:filename>')
 def serve_srt(filename):
-    """Serve SRT file with improved cleanup handling"""
+    """Serve SRT file with cleanup handling"""
     file_path = os.path.join(OUTPUT_FOLDER, filename)
     
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found or has expired"}), 404
     
-    # Schedule cleanup of the SRT file after serving
-    def cleanup_after_delay():
-        time.sleep(3600)  # Wait 1 hour before cleanup
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                print(f"Auto-deleted SRT file after 1 hour: {file_path}")
-                
-                # Mark job as expired in processing status (don't remove completely yet)
-                with processing_lock:
-                    for job_id, status in processing_status.items():
-                        if status.get('output_path') == file_path:
-                            status['file_expired'] = True
-                            status['expired_at'] = datetime.now()
-                            break
-                        
-        except Exception as e:
-            print(f"Error cleaning up SRT file {file_path}: {e}")
-    
-    # Start cleanup thread
-    cleanup_thread = threading.Thread(target=cleanup_after_delay, daemon=True)
-    cleanup_thread.start()
-    
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
-
-@app.route('/queue/info')
-def queue_info():
-    """Get queue information"""
-    with processing_lock:
-        queued_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_QUEUED)
-        processing_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_PROCESSING)
-        completed_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_COMPLETED)
-        error_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_ERROR)
-    
-    return jsonify({
-        "queue_size": processing_queue.qsize(),
-        "queued": queued_count,
-        "processing": processing_count,
-        "completed": completed_count,
-        "error": error_count
-    })
 
 @app.route('/cleanup/old-files', methods=['POST'])
 def cleanup_old_files():
     """Cleanup files older than specified minutes"""
-    max_age_minutes = request.json.get('max_age_minutes', 60)  # Default 1 hour
+    max_age_minutes = request.json.get('max_age_minutes', 60)
     cleaned_files = []
     current_time = datetime.now()
     
@@ -467,7 +375,7 @@ def cleanup_old_files():
     except Exception as e:
         print(f"Error cleaning output folder: {e}")
     
-    # Clean upload files (should be rare since they're deleted after processing)
+    # Clean upload files
     try:
         for filename in os.listdir(UPLOAD_FOLDER):
             file_path = os.path.join(UPLOAD_FOLDER, filename)
@@ -480,21 +388,20 @@ def cleanup_old_files():
         print(f"Error cleaning upload folder: {e}")
     
     # Clean old job statuses (older than 2 hours)
-    with processing_lock:
-        jobs_to_remove = []
-        for job_id, status in processing_status.items():
-            if 'completed_at' in status and status['completed_at']:
-                job_age = current_time - status['completed_at']
-                if job_age.total_seconds() > (2 * 60 * 60):  # 2 hours
-                    jobs_to_remove.append(job_id)
-        
-        for job_id in jobs_to_remove:
-            del processing_status[job_id]
+    jobs_to_remove = []
+    for job_id, status in processing_status.items():
+        if 'completed_at' in status and status['completed_at']:
+            job_age = current_time - status['completed_at']
+            if job_age.total_seconds() > (2 * 60 * 60):
+                jobs_to_remove.append(job_id)
+    
+    for job_id in jobs_to_remove:
+        del processing_status[job_id]
     
     return jsonify({
         "message": f"Cleanup completed",
         "cleaned_files": cleaned_files,
-        "cleaned_jobs": len(jobs_to_remove) if 'jobs_to_remove' in locals() else 0
+        "cleaned_jobs": len(jobs_to_remove)
     })
 
 # Auto cleanup scheduler (runs every hour)
@@ -513,7 +420,7 @@ def scheduled_cleanup():
                         file_path = os.path.join(folder, filename)
                         if os.path.isfile(file_path):
                             file_age = current_time - datetime.fromtimestamp(os.path.getmtime(file_path))
-                            if file_age.total_seconds() > (2 * 60 * 60):  # 2 hours
+                            if file_age.total_seconds() > (2 * 60 * 60):
                                 os.remove(file_path)
                                 cleaned_count += 1
                                 print(f"Auto-cleaned old file: {file_path}")
@@ -521,16 +428,15 @@ def scheduled_cleanup():
                     print(f"Error in scheduled cleanup for {folder}: {e}")
             
             # Clean old job statuses
-            with processing_lock:
-                jobs_to_remove = []
-                for job_id, status in processing_status.items():
-                    if 'completed_at' in status and status['completed_at']:
-                        job_age = current_time - status['completed_at']
-                        if job_age.total_seconds() > (4 * 60 * 60):  # 4 hours for status
-                            jobs_to_remove.append(job_id)
-                
-                for job_id in jobs_to_remove:
-                    del processing_status[job_id]
+            jobs_to_remove = []
+            for job_id, status in processing_status.items():
+                if 'completed_at' in status and status['completed_at']:
+                    job_age = current_time - status['completed_at']
+                    if job_age.total_seconds() > (4 * 60 * 60):
+                        jobs_to_remove.append(job_id)
+            
+            for job_id in jobs_to_remove:
+                del processing_status[job_id]
             
             if cleaned_count > 0 or jobs_to_remove:
                 print(f"Scheduled cleanup: {cleaned_count} files, {len(jobs_to_remove)} job statuses")
@@ -538,6 +444,7 @@ def scheduled_cleanup():
         except Exception as e:
             print(f"Error in scheduled cleanup: {e}")
 
+import threading
 # Start scheduled cleanup thread
 cleanup_thread = threading.Thread(target=scheduled_cleanup, daemon=True)
 cleanup_thread.start()

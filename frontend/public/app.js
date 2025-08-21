@@ -7,7 +7,7 @@ let allJobs = {};
 // Constants
 const API_BASE_URL = "http://127.0.0.1:5000";
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-const MAX_FILES = 5;
+const MAX_FILES = 10; // Increased since we process one by one
 const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/x-ms-wma'];
 const STATUS_UPDATE_INTERVAL = 2000; // 2 seconds
 const DOWNLOAD_TIMER_DURATION = 60 * 60; // 1 hour (3600 seconds) - matches backend cleanup timing
@@ -117,6 +117,26 @@ const Utils = {
         setTimeout(() => {
             DOM.errorMessage.classList.remove('show');
         }, 5000);
+    },
+
+    /**
+     * Show success message
+     */
+    showSuccess(message) {
+        // Create or update success message element
+        let successMessage = document.getElementById('successMessage');
+        if (!successMessage) {
+            successMessage = document.createElement('div');
+            successMessage.id = 'successMessage';
+            successMessage.className = 'success-message';
+            DOM.errorMessage.parentNode.insertBefore(successMessage, DOM.errorMessage.nextSibling);
+        }
+        
+        successMessage.textContent = message;
+        successMessage.classList.add('show');
+        setTimeout(() => {
+            successMessage.classList.remove('show');
+        }, 3000);
     }
 };
 
@@ -239,11 +259,11 @@ const FileManager = {
 };
 
 /**
- * Upload Handler
+ * Upload Handler - Updated for single file processing
  */
 const UploadHandler = {
     /**
-     * Handle form submission
+     * Handle form submission - process files one by one
      */
     async handleSubmit(e) {
         e.preventDefault();
@@ -253,64 +273,99 @@ const UploadHandler = {
             return;
         }
 
-        const formData = this._prepareFormData();
         this._setLoadingState(true);
+        
+        // Show queue status
+        DOM.queueStatus.classList.add('show');
+        StatusMonitor.start();
 
         try {
-            const res = await axios.post(`${API_BASE_URL}/upload`, formData, {
-                headers: { "Content-Type": "multipart/form-data" }
-            });
-
-            jobIds = [...jobIds, ...res.data.job_ids]; // Append new job IDs instead of replacing
+            // Process each file individually
+            for (let i = 0; i < selectedFiles.length; i++) {
+                await this._processFile(i);
+            }
             
-            // Show queue status and start monitoring (don't hide previous jobs)
-            DOM.queueStatus.classList.add('show');
-            StatusMonitor.start();
+            Utils.showSuccess(`Successfully started processing ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}`);
             
             // Reset form but keep job list visible
             this._resetForm();
 
         } catch (err) {
             console.error(err);
-            Utils.showError("Error: " + (err.response?.data?.error || err.message));
+            Utils.showError("Error: " + (err.message || "Upload failed"));
         } finally {
             this._setLoadingState(false);
         }
     },
 
-    _prepareFormData() {
-        const formData = new FormData();
-        
-        // Add files
-        selectedFiles.forEach((file) => {
-            formData.append('files', file);
-        });
-        
-        // Add custom names
-        selectedFiles.forEach((file, index) => {
-            const customNameInput = document.getElementById(`customName${index}`);
-            const customName = customNameInput ? customNameInput.value.trim() : '';
-            formData.append('filenames', customName);
-        });
+    /**
+     * Process a single file
+     */
+    async _processFile(fileIndex) {
+        const file = selectedFiles[fileIndex];
+        const customNameInput = document.getElementById(`customName${fileIndex}`);
+        const customName = customNameInput ? customNameInput.value.trim() : '';
 
-        return formData;
+        const formData = new FormData();
+        formData.append('file', file);
+        if (customName) {
+            formData.append('filename', customName);
+        }
+
+        try {
+            const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
+                headers: { "Content-Type": "multipart/form-data" },
+                timeout: 300000 // 5 minutes timeout for processing
+            });
+
+            // Add job ID to our tracking list
+            jobIds.push(response.data.job_id);
+            
+            // Add initial status to allJobs
+            allJobs[response.data.job_id] = {
+                status: 'processing',
+                filename: file.name,
+                custom_name: customName,
+                safe_name: customName || file.name.split('.')[0],
+                file_size: file.size,
+                started_at: new Date().toISOString()
+            };
+
+        } catch (error) {
+            console.error(`Error processing ${file.name}:`, error);
+            
+            // Create error job entry
+            const errorJobId = `error_${Date.now()}_${fileIndex}`;
+            allJobs[errorJobId] = {
+                status: 'error',
+                filename: file.name,
+                custom_name: customName,
+                safe_name: customName || file.name.split('.')[0],
+                file_size: file.size,
+                error: error.response?.data?.error || error.message || 'Upload failed',
+                started_at: new Date().toISOString(),
+                completed_at: new Date().toISOString()
+            };
+            
+            // Still add to jobIds for tracking
+            jobIds.push(errorJobId);
+        }
     },
 
     _setLoadingState(isLoading) {
         DOM.submitBtn.disabled = isLoading;
-        DOM.submitBtn.textContent = isLoading ? 'Uploading...' : 'Start Batch Processing';
+        DOM.submitBtn.textContent = isLoading ? 'Processing Files...' : 'Start Processing';
     },
 
     _resetForm() {
         selectedFiles = [];
         DOM.fileInput.value = '';
         FileManager.updateFileList();
-        // Don't reset job list or queue status
     }
 };
 
 /**
- * Status Monitor - FIXED VERSION
+ * Status Monitor - Updated for Flask API
  */
 const StatusMonitor = {
     /**
@@ -340,26 +395,30 @@ const StatusMonitor = {
      */
     async update() {
         try {
-            // Get queue info
-            const queueInfo = await axios.get(`${API_BASE_URL}/queue/info`);
-            const { queued, processing, completed, error } = queueInfo.data;
-            
-            // Update stats
-            this._updateStats(queued, processing, completed, error);
-            
-            // Get all job statuses
+            // Get all job statuses from Flask API
             const statusResponse = await axios.get(`${API_BASE_URL}/status`);
-            const newStatuses = statusResponse.data;
+            const serverStatuses = statusResponse.data;
             
-            // FIXED: Properly merge statuses without overwriting completed jobs
-            this._mergeStatuses(newStatuses);
+            // Update our local job statuses
+            this._updateJobStatuses(serverStatuses);
             
+            // Update queue statistics
+            this._updateQueueStats(serverStatuses);
+            
+            // Update job list display
             JobList.update(allJobs);
             
-            // Check if we should stop monitoring current batch
-            const currentBatchComplete = this._isCurrentBatchComplete(newStatuses, queued, processing);
-            if (currentBatchComplete) {
-                this.stop();
+            // Check if we should stop monitoring
+            const hasActiveJobs = Object.values(allJobs).some(job => 
+                job.status === 'processing' || job.status === 'correcting'
+            );
+            
+            if (!hasActiveJobs && Object.keys(allJobs).length > 0) {
+                // Still have jobs but none are active - keep monitoring but less frequently
+                if (statusInterval && STATUS_UPDATE_INTERVAL < 5000) {
+                    clearInterval(statusInterval);
+                    statusInterval = setInterval(() => this.update(), 5000); // Check every 5 seconds instead
+                }
             }
             
         } catch (error) {
@@ -368,100 +427,65 @@ const StatusMonitor = {
     },
 
     /**
-     * FIXED: Properly merge new statuses with existing ones
+     * Update job statuses from server response
      */
-    _mergeStatuses(newStatuses) {
-        Object.entries(newStatuses).forEach(([jobId, newStatus]) => {
-            const existingStatus = allJobs[jobId];
-            
-            if (!existingStatus) {
-                // New job - add it
-                allJobs[jobId] = newStatus;
-            } else {
-                // Existing job - only update if the new status is more recent or different
-                const shouldUpdate = this._shouldUpdateStatus(existingStatus, newStatus);
-                
-                if (shouldUpdate) {
-                    // Preserve important fields that shouldn't be overwritten
-                    const preservedFields = {};
-                    
-                    // Preserve download timer state if job was previously completed
-                    if (existingStatus.status === 'completed' && 
-                        newStatus.status === 'completed' && 
-                        downloadTimers[jobId]) {
-                        // Don't reset completed jobs that already have download timers
-                        preservedFields.download_timer_active = true;
-                    }
-                    
-                    // Update the status while preserving important fields
-                    allJobs[jobId] = { ...newStatus, ...preservedFields };
-                }
+    _updateJobStatuses(serverStatuses) {
+        // Update existing jobs with server data
+        Object.entries(serverStatuses).forEach(([jobId, serverStatus]) => {
+            if (allJobs[jobId]) {
+                // Merge server status with local status
+                allJobs[jobId] = {
+                    ...allJobs[jobId],
+                    ...serverStatus
+                };
+            } else if (jobIds.includes(jobId)) {
+                // New job from server that we're tracking
+                allJobs[jobId] = serverStatus;
             }
         });
-        
-        // Remove jobs that are no longer in the server response and are old
-        const currentTime = new Date();
-        Object.keys(allJobs).forEach(jobId => {
-            if (!newStatuses[jobId]) {
-                const job = allJobs[jobId];
-                // Only remove if job is older than 2 hours and not currently downloading
-                if (job.completed_at) {
-                    const completedTime = new Date(job.completed_at);
-                    const hoursDiff = (currentTime - completedTime) / (1000 * 60 * 60);
-                    
-                    // Remove if older than 2 hours and no active download timer
-                    if (hoursDiff > 2 && !downloadTimers[jobId]) {
-                        delete allJobs[jobId];
-                    }
-                }
+
+        // Mark jobs as expired if they're not in server response but were previously completed
+        Object.entries(allJobs).forEach(([jobId, job]) => {
+            if (!serverStatuses[jobId] && job.status === 'completed') {
+                // Job not found on server - probably expired
+                allJobs[jobId] = {
+                    ...job,
+                    expired: true,
+                    file_available: false
+                };
             }
         });
     },
 
     /**
-     * Determine if an existing status should be updated with new status
+     * Calculate and update queue statistics
      */
-    _shouldUpdateStatus(existingStatus, newStatus) {
-        // Always update if status changed
-        if (existingStatus.status !== newStatus.status) {
-            return true;
-        }
-        
-        // Update if new status has more recent timestamp
-        if (newStatus.completed_at && existingStatus.completed_at) {
-            const newTime = new Date(newStatus.completed_at);
-            const existingTime = new Date(existingStatus.completed_at);
-            return newTime > existingTime;
-        }
-        
-        // Update if new status has started_at but existing doesn't
-        if (newStatus.started_at && !existingStatus.started_at) {
-            return true;
-        }
-        
-        // Don't update completed jobs that already have download URLs
-        if (existingStatus.status === 'completed' && 
-            existingStatus.srt_url && 
-            newStatus.status === 'completed') {
-            return false;
-        }
-        
-        return true;
-    },
+    _updateQueueStats(serverStatuses) {
+        const stats = {
+            queued: 0,
+            processing: 0,
+            correcting: 0,
+            completed: 0,
+            error: 0
+        };
 
-    /**
-     * Check if current batch is complete (but don't stop monitoring all jobs)
-     */
-    _isCurrentBatchComplete(currentStatuses, queued, processing) {
-        const currentJobs = Object.keys(currentStatuses).length;
-        return currentJobs > 0 && queued === 0 && processing === 0;
-    },
+        Object.values(serverStatuses).forEach(job => {
+            if (job.status === 'processing') {
+                stats.processing++;
+            } else if (job.status === 'correcting') {
+                stats.correcting++;
+            } else if (job.status === 'completed') {
+                stats.completed++;
+            } else if (job.status === 'error') {
+                stats.error++;
+            }
+        });
 
-    _updateStats(queued, processing, completed, error) {
-        document.getElementById('queuedCount').textContent = queued;
-        document.getElementById('processingCount').textContent = processing;
-        document.getElementById('completedCount').textContent = completed;
-        document.getElementById('errorCount').textContent = error;
+        // Update DOM
+        document.getElementById('queuedCount').textContent = stats.queued;
+        document.getElementById('processingCount').textContent = stats.processing + stats.correcting;
+        document.getElementById('completedCount').textContent = stats.completed;
+        document.getElementById('errorCount').textContent = stats.error;
     }
 };
 
@@ -475,58 +499,28 @@ const JobList = {
     update(statuses) {
         const jobList = document.getElementById('jobList');
         
-        // Don't clear existing jobs, instead update them intelligently
-        this._updateExistingJobs(statuses);
-        this._addNewJobs(statuses, jobList);
+        // Clear and rebuild job list to maintain proper order
+        jobList.innerHTML = '';
+        
+        // Sort jobs by started_at time
+        const sortedJobs = Object.entries(statuses).sort(([, a], [, b]) => {
+            const timeA = new Date(a.started_at || 0);
+            const timeB = new Date(b.started_at || 0);
+            return timeA - timeB;
+        });
+
+        // Add each job to the list
+        sortedJobs.forEach(([jobId, status]) => {
+            const jobItem = this._createJobItem(jobId, status);
+            jobList.appendChild(jobItem);
+        });
         
         // Start timers for newly completed jobs
         Object.entries(statuses).forEach(([jobId, status]) => {
-            if (status.status === 'completed' && status.srt_url && !downloadTimers[jobId]) {
+            if (status.status === 'completed' && status.srt_url && !downloadTimers[jobId] && !status.expired) {
                 DownloadManager.startTimer(jobId);
             }
         });
-    },
-
-    _updateExistingJobs(statuses) {
-        Object.entries(statuses).forEach(([jobId, status]) => {
-            const existingJobElement = document.getElementById(`job-${jobId}`);
-            if (existingJobElement) {
-                // Update existing job in place
-                const updatedJobItem = this._createJobItem(jobId, status);
-                existingJobElement.innerHTML = updatedJobItem.innerHTML;
-            }
-        });
-    },
-
-    _addNewJobs(statuses, jobList) {
-        Object.entries(statuses).forEach(([jobId, status]) => {
-            const existingJobElement = document.getElementById(`job-${jobId}`);
-            if (!existingJobElement) {
-                // Add new job
-                const jobItem = this._createJobItem(jobId, status);
-                jobList.appendChild(jobItem);
-            }
-        });
-
-        // Re-sort all jobs by queued time
-        this._sortJobsByTime(jobList);
-    },
-
-    _sortJobsByTime(jobList) {
-        const jobItems = Array.from(jobList.children);
-        jobItems.sort((a, b) => {
-            const jobIdA = a.id.replace('job-', '');
-            const jobIdB = b.id.replace('job-', '');
-            const statusA = allJobs[jobIdA];
-            const statusB = allJobs[jobIdB];
-            
-            if (!statusA || !statusB) return 0;
-            
-            return new Date(statusA.queued_at) - new Date(statusB.queued_at);
-        });
-        
-        // Re-append in sorted order
-        jobItems.forEach(item => jobList.appendChild(item));
     },
 
     _createJobItem(jobId, status) {
@@ -545,30 +539,60 @@ const JobList = {
             processingTime = `${((end - start) / 1000).toFixed(1)}s`;
         }
         
+        // Format status for display
+        let statusText = status.status;
+        if (status.status === 'correcting') {
+            statusText = 'correcting transcript';
+        }
+        
         jobItem.innerHTML = `
             <div class="job-header">
                 <div class="job-name">📎 ${displayName}</div>
-                <div class="status-badge ${statusClass}">${status.status}</div>
+                <div class="status-badge ${statusClass}">${statusText}</div>
             </div>
             <div class="job-details">
                 <div>Size: ${Utils.formatFileSize(status.file_size)}</div>
-                <div>Queued: ${new Date(status.queued_at).toLocaleTimeString()}</div>
+                <div>Started: ${new Date(status.started_at).toLocaleTimeString()}</div>
                 ${processingTime ? `<div>Time: ${processingTime}</div>` : ''}
                 ${status.error ? `<div style="color: #c53030;">Error: ${status.error}</div>` : ''}
+                ${status.expired ? `<div style="color: #c53030;">⚠️ File expired</div>` : ''}
             </div>
-            ${status.status === 'completed' && status.srt_url ? `
-                <div class="job-actions" id="actions-${jobId}">
-                    <button class="download-btn" id="download-${jobId}" onclick="DownloadManager.download('${status.srt_url}', '${displayName}.srt', '${jobId}')">
-                        📄 Download SRT
-                    </button>
-                    <div class="download-timer" id="timer-${jobId}" style="font-size: 11px; color: #718096; margin-top: 8px;">
-                        <span id="timer-text-${jobId}">Available for download</span>
-                    </div>
-                </div>
-            ` : ''}
+            ${this._renderJobActions(jobId, status, displayName)}
         `;
         
         return jobItem;
+    },
+
+    _renderJobActions(jobId, status, displayName) {
+        if (status.status !== 'completed') {
+            return '';
+        }
+
+        if (status.expired || !status.srt_url) {
+            return `
+                <div class="job-actions">
+                    <div style="padding: 12px; background: #fed7d7; border: 1px solid #feb2b2; border-radius: 8px; text-align: center;">
+                        <div style="color: #c53030; font-weight: 600; font-size: 14px; margin-bottom: 4px;">
+                            🕒 Download Expired
+                        </div>
+                        <div style="color: #9c4221; font-size: 12px;">
+                            File has been automatically deleted from server
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="job-actions" id="actions-${jobId}">
+                <button class="download-btn" id="download-${jobId}" onclick="DownloadManager.download('${status.srt_url}', '${displayName}.srt', '${jobId}')">
+                    📄 Download SRT
+                </button>
+                <div class="download-timer" id="timer-${jobId}" style="font-size: 11px; color: #718096; margin-top: 8px;">
+                    <span id="timer-text-${jobId}">Available for download</span>
+                </div>
+            </div>
+        `;
     }
 };
 
@@ -580,7 +604,14 @@ const DownloadManager = {
      * Start download countdown timer
      */
     startTimer(jobId) {
-        let timeLeft = DOWNLOAD_TIMER_DURATION; // Start with 1 hour (3600 seconds)
+        // Get the download expiry time from server status if available
+        const jobStatus = allJobs[jobId];
+        let timeLeft = DOWNLOAD_TIMER_DURATION; // Default to 1 hour
+        
+        if (jobStatus && jobStatus.download_expires_in !== undefined) {
+            timeLeft = Math.max(0, jobStatus.download_expires_in);
+        }
+        
         downloadTimers[jobId] = { timeLeft: timeLeft, hasBeenDownloaded: false, interval: null };
         
         const timerInterval = setInterval(() => {
@@ -608,7 +639,6 @@ const DownloadManager = {
             }
         }, 1000);
         
-        // Store the interval reference so we can clear it later if needed
         downloadTimers[jobId].interval = timerInterval;
     },
 
@@ -616,16 +646,13 @@ const DownloadManager = {
         const formattedTime = Utils.formatTime(timeLeft);
         
         if (hasBeenDownloaded) {
-            // After download - show 30 second countdown
             timerText.textContent = `Download expires in ${formattedTime}`;
             timerText.style.color = '#e53e3e';
             downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
             downloadBtn.innerHTML = `⚠️ Download SRT (${formattedTime})`;
         } else {
-            // Before download - show normal countdown
             timerText.textContent = `Available for ${formattedTime}`;
             
-            // Change colors based on time remaining
             if (timeLeft <= 300) { // 5 minutes or less - red warning
                 timerText.style.color = '#e53e3e';
                 downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
@@ -638,7 +665,6 @@ const DownloadManager = {
                 timerText.style.color = '#b7791f';
                 timerText.textContent = `Expires in ${formattedTime}`;
             } else {
-                // More than 30 minutes - normal state
                 timerText.style.color = '#718096';
                 timerText.textContent = `Available for ${formattedTime}`;
             }
@@ -648,6 +674,12 @@ const DownloadManager = {
     _handleTimerExpiry(timerInterval, jobId, actionsDiv) {
         clearInterval(timerInterval);
         delete downloadTimers[jobId];
+        
+        // Mark job as expired in allJobs
+        if (allJobs[jobId]) {
+            allJobs[jobId].expired = true;
+            allJobs[jobId].file_available = false;
+        }
         
         actionsDiv.innerHTML = `
             <div style="padding: 12px; background: #fed7d7; border: 1px solid #feb2b2; border-radius: 8px; text-align: center;">
@@ -660,7 +692,6 @@ const DownloadManager = {
             </div>
         `;
         
-        // Add fade-out animation
         actionsDiv.style.transition = 'opacity 0.5s ease';
         actionsDiv.style.opacity = '0.7';
     },
@@ -678,8 +709,7 @@ const DownloadManager = {
         }
 
         // Perform the actual download
-        const urlFilename = srtUrl.split('/').pop();
-        const downloadName = customFilename || urlFilename;
+        const downloadName = customFilename || srtUrl.split('/').pop();
         const link = document.createElement("a");
         link.href = API_BASE_URL + srtUrl;
         link.download = downloadName;
@@ -700,6 +730,8 @@ const DownloadManager = {
             downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
             downloadBtn.innerHTML = '⚠️ Download SRT (30s)';
         }
+
+        Utils.showSuccess(`Download started: ${downloadName}`);
     }
 };
 
@@ -761,9 +793,7 @@ const EventHandlers = {
 
     _initRefreshButton() {
         document.getElementById('refreshBtn').addEventListener('click', () => {
-            if (statusInterval) {
-                StatusMonitor.update();
-            }
+            StatusMonitor.update();
         });
     },
 
@@ -799,7 +829,10 @@ const App = {
         // Initialize event handlers
         EventHandlers.init();
         
-        console.log('Batch Audio Transcription App initialized');
+        // Load existing jobs on startup
+        StatusMonitor.update();
+        
+        console.log('Audio Transcription App initialized');
     }
 };
 
