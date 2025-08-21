@@ -2,6 +2,7 @@ let selectedFiles = [];
 let jobIds = [];
 let statusInterval = null;
 let downloadTimers = {};
+let allJobs = {};
 
 // Constants
 const API_BASE_URL = "http://127.0.0.1:5000";
@@ -260,13 +261,13 @@ const UploadHandler = {
                 headers: { "Content-Type": "multipart/form-data" }
             });
 
-            jobIds = res.data.job_ids;
+            jobIds = [...jobIds, ...res.data.job_ids]; // Append new job IDs instead of replacing
             
-            // Show queue status and start monitoring
+            // Show queue status and start monitoring (don't hide previous jobs)
             DOM.queueStatus.classList.add('show');
             StatusMonitor.start();
             
-            // Reset form
+            // Reset form but keep job list visible
             this._resetForm();
 
         } catch (err) {
@@ -304,6 +305,7 @@ const UploadHandler = {
         selectedFiles = [];
         DOM.fileInput.value = '';
         FileManager.updateFileList();
+        // Don't reset job list or queue status
     }
 };
 
@@ -347,21 +349,30 @@ const StatusMonitor = {
             
             // Get all job statuses
             const statusResponse = await axios.get(`${API_BASE_URL}/status`);
-            const allStatuses = statusResponse.data;
+            const newStatuses = statusResponse.data;
             
-            JobList.update(allStatuses);
+            // Merge new statuses with existing jobs (don't replace, merge)
+            allJobs = { ...allJobs, ...newStatuses };
             
-            // Stop monitoring if all jobs are done
-            const totalJobs = Object.keys(allStatuses).length;
-            const finishedJobs = completed + error;
+            JobList.update(allJobs);
             
-            if (totalJobs > 0 && finishedJobs === totalJobs) {
+            // Check if we should stop monitoring current batch
+            const currentBatchComplete = this._isCurrentBatchComplete(newStatuses, queued, processing);
+            if (currentBatchComplete) {
                 this.stop();
             }
             
         } catch (error) {
             console.error('Error updating status:', error);
         }
+    },
+
+    /**
+     * Check if current batch is complete (but don't stop monitoring all jobs)
+     */
+    _isCurrentBatchComplete(currentStatuses, queued, processing) {
+        const currentJobs = Object.keys(currentStatuses).length;
+        return currentJobs > 0 && queued === 0 && processing === 0;
     },
 
     _updateStats(queued, processing, completed, error) {
@@ -381,22 +392,59 @@ const JobList = {
      */
     update(statuses) {
         const jobList = document.getElementById('jobList');
-        jobList.innerHTML = '';
         
-        // Sort jobs by queued time
-        const sortedJobs = Object.entries(statuses).sort((a, b) => 
-            new Date(a[1].queued_at) - new Date(b[1].queued_at)
-        );
+        // Don't clear existing jobs, instead update them intelligently
+        this._updateExistingJobs(statuses);
+        this._addNewJobs(statuses, jobList);
         
-        sortedJobs.forEach(([jobId, status]) => {
-            const jobItem = this._createJobItem(jobId, status);
-            jobList.appendChild(jobItem);
-            
-            // Start countdown timer for completed jobs (if not already started)
+        // Start timers for newly completed jobs
+        Object.entries(statuses).forEach(([jobId, status]) => {
             if (status.status === 'completed' && status.srt_url && !downloadTimers[jobId]) {
                 DownloadManager.startTimer(jobId);
             }
         });
+    },
+
+    _updateExistingJobs(statuses) {
+        Object.entries(statuses).forEach(([jobId, status]) => {
+            const existingJobElement = document.getElementById(`job-${jobId}`);
+            if (existingJobElement) {
+                // Update existing job in place
+                const updatedJobItem = this._createJobItem(jobId, status);
+                existingJobElement.innerHTML = updatedJobItem.innerHTML;
+            }
+        });
+    },
+
+    _addNewJobs(statuses, jobList) {
+        Object.entries(statuses).forEach(([jobId, status]) => {
+            const existingJobElement = document.getElementById(`job-${jobId}`);
+            if (!existingJobElement) {
+                // Add new job
+                const jobItem = this._createJobItem(jobId, status);
+                jobList.appendChild(jobItem);
+            }
+        });
+
+        // Re-sort all jobs by queued time
+        this._sortJobsByTime(jobList);
+    },
+
+    _sortJobsByTime(jobList) {
+        const jobItems = Array.from(jobList.children);
+        jobItems.sort((a, b) => {
+            const jobIdA = a.id.replace('job-', '');
+            const jobIdB = b.id.replace('job-', '');
+            const statusA = allJobs[jobIdA];
+            const statusB = allJobs[jobIdB];
+            
+            if (!statusA || !statusB) return 0;
+            
+            return new Date(statusA.queued_at) - new Date(statusB.queued_at);
+        });
+        
+        // Re-append in sorted order
+        jobItems.forEach(item => jobList.appendChild(item));
     },
 
     _createJobItem(jobId, status) {
@@ -677,8 +725,28 @@ const App = {
 window.removeFile = (index) => FileManager.removeFile(index);
 window.downloadSRT = (srtUrl, customFilename, jobId) => DownloadManager.download(srtUrl, customFilename, jobId);
 window.clearCompleted = function() {
-    if (confirm('Clear all completed jobs? This will refresh the page.')) {
-        location.reload();
+    if (confirm('Clear all completed jobs? This will remove them from the display.')) {
+        // Remove completed jobs from allJobs
+        Object.keys(allJobs).forEach(jobId => {
+            if (allJobs[jobId].status === 'completed' || allJobs[jobId].status === 'error') {
+                delete allJobs[jobId];
+                // Clear timers for removed jobs
+                if (downloadTimers[jobId]) {
+                    if (downloadTimers[jobId].interval) {
+                        clearInterval(downloadTimers[jobId].interval);
+                    }
+                    delete downloadTimers[jobId];
+                }
+            }
+        });
+        
+        // Update the display
+        JobList.update(allJobs);
+        
+        // If no jobs left, hide the queue status
+        if (Object.keys(allJobs).length === 0) {
+            DOM.queueStatus.classList.remove('show');
+        }
     }
 };
 
