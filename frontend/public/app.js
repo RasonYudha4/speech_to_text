@@ -450,12 +450,17 @@ const DownloadManager = {
      * Start download countdown timer
      */
     startTimer(jobId) {
-        let timeLeft = DOWNLOAD_TIMER_DURATION; // Now 1 hour (3600 seconds)
-        downloadTimers[jobId] = timeLeft;
+        let timeLeft = DOWNLOAD_TIMER_DURATION; // Start with 1 hour (3600 seconds)
+        downloadTimers[jobId] = { timeLeft: timeLeft, hasBeenDownloaded: false, interval: null };
         
         const timerInterval = setInterval(() => {
-            timeLeft--;
-            downloadTimers[jobId] = timeLeft;
+            const timerData = downloadTimers[jobId];
+            if (!timerData) {
+                clearInterval(timerInterval);
+                return;
+            }
+            
+            timerData.timeLeft--;
             
             const timerText = document.getElementById(`timer-text-${jobId}`);
             const downloadBtn = document.getElementById(`download-${jobId}`);
@@ -466,34 +471,47 @@ const DownloadManager = {
                 return;
             }
             
-            if (timeLeft > 0) {
-                this._updateTimerDisplay(timeLeft, timerText, downloadBtn);
+            if (timerData.timeLeft > 0) {
+                this._updateTimerDisplay(timerData.timeLeft, timerText, downloadBtn, timerData.hasBeenDownloaded);
             } else {
                 this._handleTimerExpiry(timerInterval, jobId, actionsDiv);
             }
         }, 1000);
+        
+        // Store the interval reference so we can clear it later if needed
+        downloadTimers[jobId].interval = timerInterval;
     },
 
-    _updateTimerDisplay(timeLeft, timerText, downloadBtn) {
+    _updateTimerDisplay(timeLeft, timerText, downloadBtn, hasBeenDownloaded) {
         const formattedTime = Utils.formatTime(timeLeft);
-        timerText.textContent = `Auto-expires in ${formattedTime}`;
         
-        // Change colors based on time remaining
-        if (timeLeft <= 300) { // 5 minutes or less - red warning
+        if (hasBeenDownloaded) {
+            // After download - show 30 second countdown
+            timerText.textContent = `Download expires in ${formattedTime}`;
             timerText.style.color = '#e53e3e';
             downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
             downloadBtn.innerHTML = `⚠️ Download SRT (${formattedTime})`;
-        } else if (timeLeft <= 600) { // 10 minutes or less - orange warning
-            timerText.style.color = '#d69e2e';
-            downloadBtn.style.background = 'linear-gradient(135deg, #ed8936, #d69e2e)';
-            downloadBtn.innerHTML = `⏰ Download SRT (${formattedTime})`;
-        } else if (timeLeft <= 1800) { // 30 minutes or less - yellow caution
-            timerText.style.color = '#b7791f';
-            timerText.textContent = `Expires in ${formattedTime}`;
         } else {
-            // More than 30 minutes - normal state
-            timerText.style.color = '#718096';
+            // Before download - show normal countdown
             timerText.textContent = `Available for ${formattedTime}`;
+            
+            // Change colors based on time remaining
+            if (timeLeft <= 300) { // 5 minutes or less - red warning
+                timerText.style.color = '#e53e3e';
+                downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
+                downloadBtn.innerHTML = `⚠️ Download SRT (${formattedTime})`;
+            } else if (timeLeft <= 600) { // 10 minutes or less - orange warning
+                timerText.style.color = '#d69e2e';
+                downloadBtn.style.background = 'linear-gradient(135deg, #ed8936, #d69e2e)';
+                downloadBtn.innerHTML = `⏰ Download SRT (${formattedTime})`;
+            } else if (timeLeft <= 1800) { // 30 minutes or less - yellow caution
+                timerText.style.color = '#b7791f';
+                timerText.textContent = `Expires in ${formattedTime}`;
+            } else {
+                // More than 30 minutes - normal state
+                timerText.style.color = '#718096';
+                timerText.textContent = `Available for ${formattedTime}`;
+            }
         }
     },
 
@@ -507,7 +525,7 @@ const DownloadManager = {
                     🕒 Download Expired
                 </div>
                 <div style="color: #9c4221; font-size: 12px;">
-                    File has been automatically deleted from server (after 1 hour)
+                    File has been automatically deleted from server
                 </div>
             </div>
         `;
@@ -521,8 +539,10 @@ const DownloadManager = {
      * Download SRT file
      */
     download(srtUrl, customFilename, jobId) {
-        // Check if timer expired
-        if (!downloadTimers[jobId] || downloadTimers[jobId] <= 0) {
+        const timerData = downloadTimers[jobId];
+        
+        // Check if timer expired or doesn't exist
+        if (!timerData || timerData.timeLeft <= 0) {
             Utils.showError('Download link has expired. File has been deleted from server.');
             return;
         }
@@ -537,17 +557,20 @@ const DownloadManager = {
         link.click();
         document.body.removeChild(link);
 
-        // 🟢 After first click → reset timer to 30s
-        downloadTimers[jobId] = 30;
+        // After first download - reset timer to 30 seconds and mark as downloaded
+        timerData.timeLeft = 30;
+        timerData.hasBeenDownloaded = true;
 
         const timerText = document.getElementById(`timer-text-${jobId}`);
         const downloadBtn = document.getElementById(`download-${jobId}`);
+        
         if (timerText && downloadBtn) {
             timerText.textContent = "Download started - expires in 30s";
-            timerText.style.color = '#d69e2e';
+            timerText.style.color = '#e53e3e';
+            downloadBtn.style.background = 'linear-gradient(135deg, #f56565, #e53e3e)';
+            downloadBtn.innerHTML = '⚠️ Download SRT (30s)';
         }
     }
-
 };
 
 /**

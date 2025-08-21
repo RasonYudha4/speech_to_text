@@ -70,10 +70,16 @@ def correct_transcript(raw_transcript):
                 WRONG: 00:09:59,260 --> 01:00:01,290 
                 RIGHT: 00:09:59,260 --> 00:10:21,290
 
-                WRONG: 06:14,848 --> 06:16,078 (no hours in SRT)
-                RIGHT: 00:06:14,848 --> 00:06:16,078
+                WRONG: 01:14,848 --> 01:16,078 (no hours in SRT)
+                RIGHT: 00:01:14,848 --> 00:01:16,078
                 
                 Return only the corrected SRT content, nothing else.
+
+                Only start with the srt content, please delete this if you see any of it 
+                ```srt
+                1
+                00:00:03,137 --> 00:00:19,267
+                [music]
                 ''',
                 thinking_config=types.ThinkingConfig(thinking_budget=-1)
             ),
