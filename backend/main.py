@@ -21,9 +21,11 @@ OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-api_key = os.getenv("GOOGLE_API_KEY")
+api_key1 = os.getenv("GOOGLE_API_KEY1")
+api_key2 = os.getenv("GOOGLE_API_KEY2")
 # Initialize Gemini client
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=api_key1)
+corrector = genai.Client(api_key=api_key2)
 
 # Queue system
 processing_queue = queue.Queue()
@@ -35,9 +37,57 @@ STATUS_QUEUED = "queued"
 STATUS_PROCESSING = "processing"
 STATUS_COMPLETED = "completed"
 STATUS_ERROR = "error"
+STATUS_CORRECTING = "correcting"
+
+def correct_transcript(raw_transcript):
+    """Use the corrector client to fix transcription issues"""
+    try:
+        correction_response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            config=types.GenerateContentConfig(
+                system_instruction='''
+                You are a transcript correction specialist. Your job is to fix SRT format issues in transcriptions.
+                
+                Common issues to fix:
+                1. Timecode format errors (ensure HH:MM:SS,mmm format with 3-digit milliseconds)
+                2. Impossible time jumps (like 00:06:57 jumping to 07:07:27 instead of 00:07:27)
+                3. Overlapping or backwards timecodes
+                4. Missing sequence numbers
+                5. Improper formatting
+                
+                Rules for correction:
+                - Keep all original text content unchanged
+                - Fix only the timecodes and formatting
+                - Ensure logical time progression (no huge jumps or backwards movement)
+                - Maintain proper SRT format with sequence numbers
+                - Timecodes should be HH:MM:SS,mmm (with 3-digit milliseconds)
+                - Each subtitle should have reasonable duration (typically 1-10 seconds)
+                
+                Examples of fixes needed:
+                WRONG: 00:06:57,284 --> 07:07:27,510 (impossible jump)
+                RIGHT: 00:06:57,284 --> 00:07:27,510
+                
+                WRONG: 00:09:59,260 --> 01:00:01,290 
+                RIGHT: 00:09:59,260 --> 00:10:21,290
+
+                WRONG: 06:14,848 --> 06:16,078 (no hours in SRT)
+                RIGHT: 00:06:14,848 --> 00:06:16,078
+                
+                Return only the corrected SRT content, nothing else.
+                ''',
+                thinking_config=types.ThinkingConfig(thinking_budget=-1)
+            ),
+            contents=[f"Please correct the following SRT transcript:\n\n{raw_transcript}"]
+        )
+        
+        return correction_response.text.strip() if correction_response and correction_response.text else raw_transcript
+    
+    except Exception as e:
+        print(f"Correction failed: {e}")
+        return raw_transcript
 
 def process_audio_file(job_id, upload_path, output_path, filename):
-    """Process a single audio file"""
+    """Process a single audio file with correction"""
     with processing_lock:
         processing_status[job_id]['status'] = STATUS_PROCESSING
         processing_status[job_id]['started_at'] = datetime.now()
@@ -53,14 +103,16 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             audio_bytes = f.read()
         
         # Call Gemini for transcription
-        response = client.models.generate_content(
+        response = corrector.models.generate_content(
             model='gemini-2.5-pro',
             config=types.GenerateContentConfig(
                 system_instruction='''
-                Please transcribe the provided audio into proper SRT format. You may use this example as a guide:
+                Please transcribe the provided audio into proper SRT format. Don't start with : ```srt and just directly return the SRT content.
+                You may use this example as a guide:
                 1
                 00:00:01,000 --> 00:00:05,000
                 Hello, this is an example of SRT format.
+
 
                 or just like this : 
                 1
@@ -142,13 +194,22 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             ]
         )
         
-        transcript_text = response.text if response and response.text else None
-        if not transcript_text or not transcript_text.strip():
+        raw_transcript = response.text if response and response.text else None
+        if not raw_transcript or not raw_transcript.strip():
             raise Exception("No transcript text returned")
         
-        # Save transcript
+        # Update status to correcting
+        with processing_lock:
+            processing_status[job_id]['status'] = STATUS_CORRECTING
+            processing_status[job_id]['correction_started_at'] = datetime.now()
+        
+        # Use corrector to fix transcription issues
+        print(f"Starting correction for job {job_id}")
+        corrected_transcript = correct_transcript(raw_transcript.strip())
+        
+        # Save corrected transcript
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(transcript_text.strip())
+            f.write(corrected_transcript)
         
         # Delete uploaded file after processing
         try:
@@ -166,6 +227,7 @@ def process_audio_file(job_id, upload_path, output_path, filename):
             processing_status[job_id]['completed_at'] = datetime.now()
             processing_status[job_id]['srt_url'] = f"/outputs/{output_filename}"
             processing_status[job_id]['output_path'] = output_path  # Store for cleanup
+            processing_status[job_id]['correction_completed'] = True
             
     except Exception as e:
         # Clean up upload file on error

@@ -521,32 +521,33 @@ const DownloadManager = {
      * Download SRT file
      */
     download(srtUrl, customFilename, jobId) {
-        // Check if timer has expired
+        // Check if timer expired
         if (!downloadTimers[jobId] || downloadTimers[jobId] <= 0) {
             Utils.showError('Download link has expired. File has been deleted from server.');
             return;
         }
-        
-        // Extract the actual filename from the URL or use custom name
+
+        // Perform the actual download
         const urlFilename = srtUrl.split('/').pop();
         const downloadName = customFilename || urlFilename;
-        
         const link = document.createElement("a");
         link.href = API_BASE_URL + srtUrl;
         link.download = downloadName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
-        // Show download initiated message
+
+        // 🟢 After first click → reset timer to 30s
+        downloadTimers[jobId] = 30;
+
         const timerText = document.getElementById(`timer-text-${jobId}`);
-        if (timerText) {
-            const timeLeft = downloadTimers[jobId];
-            const formattedTime = Utils.formatTime(timeLeft);
-            timerText.textContent = `Download initiated - expires in ${formattedTime}`;
-            timerText.style.color = '#38a169';
+        const downloadBtn = document.getElementById(`download-${jobId}`);
+        if (timerText && downloadBtn) {
+            timerText.textContent = "Download started - expires in 30s";
+            timerText.style.color = '#d69e2e';
         }
     }
+
 };
 
 /**
