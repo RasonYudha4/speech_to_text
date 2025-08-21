@@ -1,0 +1,51 @@
+1
+00:00:00,473 --> 00:00:02,913
+Halo semuanya, kami dari tim Nutrigo and inilah ide kami.
+
+2
+00:00:03,423 --> 00:00:07,853
+Kami memiliki ide untuk menyelesaikan mengenai masalah obesitas dan juga food waste di UMKM.
+
+3
+00:00:08,223 --> 00:00:09,873
+Bagaimana cara menyelesaikannya?
+
+4
+00:00:10,033 --> 00:00:16,423
+Ide kami adalah dengan cara membuat sebuah aplikasi di mana UMKM dapat menjual surplus-surplus food mereka.
+
+5
+00:00:16,683 --> 00:00:21,783
+Dan sebagai customer, kita dapat membeli makanan mereka dan juga dapat melakukan konsultasi dengan chatbot
+
+6
+00:00:22,233 --> 00:00:25,483
+mengenai nutrisi pada makanan dan juga gaya hidup yang lebih sehat lagi.
+
+7
+00:00:25,713 --> 00:00:32,493
+Kemudian, customer juga dapat melakukan foto pada makanan mereka
+
+8
+00:00:32,493 --> 00:00:36,153
+dan kemudian AI akan memberikan feedback mengenai jumlah nutrisi yang ada pada makanan tersebut.
+
+9
+00:00:36,713 --> 00:00:40,943
+Kemudian, dari sini kita berharap supaya benefit-nya bagi para customer,
+
+10
+00:00:40,943 --> 00:00:44,793
+mereka dapat meningkatkan gaya hidup mereka menjadi lebih sehat.
+
+11
+00:00:44,953 --> 00:00:51,693
+Dan juga untuk UMKM supaya mereka dapat meningkatkan daya jual dari mereka sendiri.
+
+12
+00:00:52,143 --> 00:00:54,943
+Dan itulah solusi yang ingin kami tawarkan dari ide kami.
+
+13
+00:00:55,243 --> 00:00:56,363
+Terima kasih.

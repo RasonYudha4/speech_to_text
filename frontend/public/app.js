@@ -7,7 +7,7 @@ let allJobs = {};
 // Constants
 const API_BASE_URL = "http://127.0.0.1:5000";
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-const MAX_FILES = 10; // Increased since we process one by one
+const MAX_FILES = 1; // Single file only
 const ALLOWED_TYPES = ['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/aac', 'audio/ogg', 'audio/mp4', 'audio/x-ms-wma'];
 const STATUS_UPDATE_INTERVAL = 2000; // 2 seconds
 const DOWNLOAD_TIMER_DURATION = 60 * 60; // 1 hour (3600 seconds) - matches backend cleanup timing
@@ -159,16 +159,16 @@ const FileManager = {
             }
         }
         
-        // Check total count
-        if (selectedFiles.length + newFiles.length > MAX_FILES) {
-            Utils.showError(`Maximum ${MAX_FILES} files allowed. Please remove some files first.`);
-            return;
+        // For single file mode, replace existing file instead of adding
+        if (selectedFiles.length > 0) {
+            selectedFiles = []; // Clear existing file
         }
         
         // Add new files (avoid duplicates)
         for (const newFile of newFiles) {
             if (!FileValidator.isDuplicate(newFile, selectedFiles)) {
                 selectedFiles.push(newFile);
+                break; // Only take first file for single file mode
             }
         }
         
@@ -209,15 +209,15 @@ const FileManager = {
         
         DOM.uploadArea.classList.remove('has-files');
         document.getElementById('uploadIcon').textContent = '🎵';
-        document.getElementById('uploadText').textContent = 'Drop your audio files here';
-        document.getElementById('uploadSubtext').textContent = `or click to browse (max ${MAX_FILES} files)`;
+        document.getElementById('uploadText').textContent = 'Drop your audio file here';
+        document.getElementById('uploadSubtext').textContent = 'or click to browse (one file at a time)';
     },
 
     _showFilesState() {
         DOM.uploadArea.classList.add('has-files');
         document.getElementById('uploadIcon').textContent = '✓';
-        document.getElementById('uploadText').textContent = `${selectedFiles.length} files selected`;
-        document.getElementById('uploadSubtext').textContent = 'Click to add more or change files';
+        document.getElementById('uploadText').textContent = `${selectedFiles.length} file selected`;
+        document.getElementById('uploadSubtext').textContent = 'Click to change file';
     },
 
     _updateFileCount() {
