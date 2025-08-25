@@ -62,6 +62,8 @@ def correct_transcript(raw_transcript):
                 - Maintain proper SRT format with sequence numbers
                 - Timecodes should be HH:MM:SS,mmm (with 3-digit milliseconds)
                 - Each subtitle should have reasonable duration (typically 1-10 seconds)
+                - Make sure there are no impossible jumps in timecodes
+                - Max sentence length should be reasonable (around 40-50 characters per line)
                 
                 Examples of fixes needed:
                 WRONG: 00:06:57,284 --> 07:07:27,510 (impossible jump)
