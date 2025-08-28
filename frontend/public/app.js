@@ -39,25 +39,6 @@ const DOM = {
  * File Validation Utilities
  */
 const FileValidator = {
-    /**
-     * Validate individual file
-     */
-    validate(file) {
-        if (file.size > MAX_FILE_SIZE) {
-            return "File size exceeds 100MB limit";
-        }
-        
-        const isValidType = ALLOWED_TYPES.some(type => 
-            file.type.includes(type.split('/')[1]) || 
-            file.name.toLowerCase().includes(type.split('/')[1])
-        );
-        
-        if (!isValidType) {
-            return "Invalid file format. Please use: MP3, WAV, FLAC, AAC, OGG, M4A, or WMA";
-        }
-        
-        return null;
-    },
 
     /**
      * Check for duplicate files
@@ -128,15 +109,6 @@ const FileManager = {
      */
     handleFileSelect(files) {
         const newFiles = Array.from(files);
-        
-        // Validate each file
-        for (const file of newFiles) {
-            const error = FileValidator.validate(file);
-            if (error) {
-                Utils.showError(`${file.name}: ${error}`);
-                return;
-            }
-        }
         
         // Check total count
         if (selectedFiles.length + newFiles.length > MAX_FILES) {

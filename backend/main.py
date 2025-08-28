@@ -1,15 +1,19 @@
-import os
 from dotenv import load_dotenv
-import mimetypes
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from google import genai
 from google.genai import types
+from datetime import datetime
+from werkzeug.utils import secure_filename
+import os
+import mimetypes
 import threading
 import queue
 import time
-from datetime import datetime
 import uuid
+import whisper
+import math
+import re
 
 load_dotenv()
 
@@ -23,14 +27,16 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 api_key1 = os.getenv("GOOGLE_API_KEY1")
 api_key2 = os.getenv("GOOGLE_API_KEY2")
-# Initialize Gemini client
-client = genai.Client(api_key=api_key1)
-corrector = genai.Client(api_key=api_key2)
+# Initialize models
+free = genai.Client(api_key=api_key1)
+pro = genai.Client(api_key=api_key2)
+translator = whisper.load_model("turbo")  
 
 # Queue system
 processing_queue = queue.Queue()
-processing_status = {}  # job_id -> status info
+processing_status = {}  
 processing_lock = threading.Lock()
+chunk_groups = {}  # Track chunks belonging to the same original file
 
 # Status constants
 STATUS_QUEUED = "queued"
@@ -38,11 +44,14 @@ STATUS_PROCESSING = "processing"
 STATUS_COMPLETED = "completed"
 STATUS_ERROR = "error"
 STATUS_CORRECTING = "correcting"
+STATUS_MERGING = "merging"
+
+CHUNK_SIZE = 25 * 1024 * 1024
 
 def correct_transcript(raw_transcript):
     """Use the corrector client to fix transcription issues"""
     try:
-        correction_response = client.models.generate_content(
+        correction_response = free.models.generate_content(
             model='gemini-2.5-flash',
             config=types.GenerateContentConfig(
                 system_instruction='''
@@ -94,161 +103,460 @@ def correct_transcript(raw_transcript):
         print(f"Correction failed: {e}")
         return raw_transcript
 
+def parse_srt_time(time_str):
+    """Parse SRT time format to seconds"""
+    try:
+        time_part, ms_part = time_str.split(',')
+        h, m, s = map(int, time_part.split(':'))
+        ms = int(ms_part)
+        return h * 3600 + m * 60 + s + ms / 1000
+    except:
+        return 0
+
+def format_srt_time(seconds):
+    """Format seconds to SRT time format"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def merge_srt_chunks(chunk_files, output_path):
+    """Merge multiple SRT chunk files into one continuous SRT file"""
+    try:
+        merged_content = []
+        current_subtitle_number = 1
+        time_offset = 0
+        
+        # Sort chunk files by chunk number
+        chunk_files.sort(key=lambda x: int(re.search(r'chunk_(\d+)', x).group(1)) if re.search(r'chunk_(\d+)', x) else 0)
+        
+        for i, chunk_file in enumerate(chunk_files):
+            if not os.path.exists(chunk_file):
+                print(f"Warning: Chunk file {chunk_file} not found")
+                continue
+                
+            with open(chunk_file, 'r', encoding='utf-8') as f:
+                chunk_content = f.read().strip()
+            
+            if not chunk_content:
+                continue
+            
+            # Parse SRT content
+            subtitles = re.findall(r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\d+\n|\Z)', chunk_content, re.DOTALL)
+            
+            chunk_max_time = 0
+            
+            for subtitle in subtitles:
+                seq_num, start_time, end_time, text = subtitle
+                
+                # Parse times and apply offset
+                start_seconds = parse_srt_time(start_time) + time_offset
+                end_seconds = parse_srt_time(end_time) + time_offset
+                
+                # Track the maximum time for this chunk
+                chunk_max_time = max(chunk_max_time, end_seconds)
+                
+                # Format the merged subtitle
+                merged_subtitle = f"{current_subtitle_number}\n{format_srt_time(start_seconds)} --> {format_srt_time(end_seconds)}\n{text.strip()}\n"
+                merged_content.append(merged_subtitle)
+                current_subtitle_number += 1
+            
+            # Update time offset for next chunk (add small gap between chunks)
+            time_offset = chunk_max_time + 0.1  # 100ms gap between chunks
+            
+            # Clean up chunk file
+            try:
+                os.remove(chunk_file)
+                print(f"Cleaned up chunk file: {chunk_file}")
+            except Exception as e:
+                print(f"Warning: Could not clean up chunk file {chunk_file}: {e}")
+        
+        # Write merged content
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(merged_content))
+        
+        print(f"Successfully merged {len(chunk_files)} chunks into {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"Error merging SRT chunks: {e}")
+        return False
+
+def check_and_merge_chunks(original_job_id):
+    """Check if all chunks for a job are completed and merge them"""
+    try:
+        with processing_lock:
+            if original_job_id not in chunk_groups:
+                print(f"Original job {original_job_id} not found in chunk_groups")
+                return False
+            
+            chunk_info = chunk_groups[original_job_id]
+            total_chunks = chunk_info['total_chunks']
+            completed_chunks = []
+            failed_chunks = []
+            processing_chunks = []
+            
+            print(f"Checking merge status for job {original_job_id}: need {total_chunks} chunks")
+            
+            # Check status of all chunks
+            for i in range(1, total_chunks + 1):
+                chunk_job_id = f"{original_job_id}_chunk_{i}"
+                if chunk_job_id in processing_status:
+                    chunk_status = processing_status[chunk_job_id]
+                    status = chunk_status['status']
+                    
+                    if status == STATUS_COMPLETED:
+                        completed_chunks.append(chunk_status.get('output_path'))
+                        print(f"Chunk {i} completed: {chunk_status.get('output_path')}")
+                    elif status == STATUS_ERROR:
+                        failed_chunks.append(i)
+                        print(f"Chunk {i} failed: {chunk_status.get('error', 'Unknown error')}")
+                    else:
+                        processing_chunks.append(i)
+                        print(f"Chunk {i} still {status}")
+                else:
+                    processing_chunks.append(i)
+                    print(f"Chunk {i} not found in processing status")
+            
+            print(f"Status summary - Completed: {len(completed_chunks)}/{total_chunks}, Failed: {len(failed_chunks)}, Processing: {len(processing_chunks)}")
+            
+            # If any chunks failed, mark the whole job as failed
+            if failed_chunks:
+                if original_job_id in processing_status:
+                    processing_status[original_job_id].update({
+                        'status': STATUS_ERROR,
+                        'error': f"Chunks {failed_chunks} failed processing",
+                        'completed_at': datetime.now()
+                    })
+                print(f"Job {original_job_id} failed due to failed chunks: {failed_chunks}")
+                return False
+            
+            # If not all chunks are completed yet, wait
+            if len(completed_chunks) < total_chunks:
+                print(f"Not ready to merge - only {len(completed_chunks)}/{total_chunks} chunks completed")
+                return False
+            
+            # All chunks completed, proceed with merging
+            print(f"All {total_chunks} chunks completed for job {original_job_id}, starting merge...")
+            
+            # Update status to merging
+            if original_job_id in processing_status:
+                processing_status[original_job_id].update({
+                    'status': STATUS_MERGING,
+                    'started_at': datetime.now() if 'started_at' not in processing_status[original_job_id] else processing_status[original_job_id]['started_at']
+                })
+        
+        # Merge chunks outside the lock
+        merged_output_path = os.path.join(OUTPUT_FOLDER, f"{chunk_info['safe_name']}.srt")
+        print(f"Merging {len(completed_chunks)} chunks into {merged_output_path}")
+        
+        if merge_srt_chunks(completed_chunks, merged_output_path):
+            with processing_lock:
+                # Update original job status
+                if original_job_id in processing_status:
+                    processing_status[original_job_id].update({
+                        'status': STATUS_COMPLETED,
+                        'completed_at': datetime.now(),
+                        'srt_url': f"/outputs/{chunk_info['safe_name']}.srt",
+                        'output_path': merged_output_path,
+                        'merged_from_chunks': True
+                    })
+                
+                # Remove individual chunk statuses
+                chunk_jobs_to_remove = []
+                for i in range(1, total_chunks + 1):
+                    chunk_job_id = f"{original_job_id}_chunk_{i}"
+                    if chunk_job_id in processing_status:
+                        chunk_jobs_to_remove.append(chunk_job_id)
+                
+                for chunk_job_id in chunk_jobs_to_remove:
+                    del processing_status[chunk_job_id]
+                    print(f"Removed chunk status: {chunk_job_id}")
+                
+                # Clean up chunk group
+                del chunk_groups[original_job_id]
+                print(f"Cleaned up chunk group: {original_job_id}")
+            
+            print(f"Successfully merged all chunks for job {original_job_id}")
+            return True
+        else:
+            with processing_lock:
+                if original_job_id in processing_status:
+                    processing_status[original_job_id].update({
+                        'status': STATUS_ERROR,
+                        'error': 'Failed to merge chunks',
+                        'completed_at': datetime.now()
+                    })
+            print(f"Failed to merge chunks for job {original_job_id}")
+            return False
+            
+    except Exception as e:
+        print(f"Error in check_and_merge_chunks for {original_job_id}: {e}")
+        print(f"Full merge error details: {repr(e)}")
+        with processing_lock:
+            if original_job_id in processing_status:
+                processing_status[original_job_id].update({
+                    'status': STATUS_ERROR,
+                    'error': f'Merge process failed: {str(e)}',
+                    'completed_at': datetime.now()
+                })
+        return False
+
 def process_audio_file(job_id, upload_path, output_path, filename):
     """Process a single audio file with correction"""
-    with processing_lock:
-        processing_status[job_id]['status'] = STATUS_PROCESSING
-        processing_status[job_id]['started_at'] = datetime.now()
-    
     try:
+        with processing_lock:
+            if job_id not in processing_status:
+                raise Exception(f"Job {job_id} not found in processing status")
+            processing_status[job_id]['status'] = STATUS_PROCESSING
+            processing_status[job_id]['started_at'] = datetime.now()
+        
+        print(f"Processing job {job_id}: {filename}")
+        print(f"Upload path: {upload_path}")
+        print(f"Output path: {output_path}")
+        
+        # Check if upload file exists
+        if not os.path.exists(upload_path):
+            raise Exception(f"Upload file not found: {upload_path}")
+        
+        # Check file size
+        file_size = os.path.getsize(upload_path)
+        print(f"Processing file size: {file_size} bytes")
+        
+        if file_size == 0:
+            raise Exception("Upload file is empty")
+        
         # Detect MIME type
         mime_type, _ = mimetypes.guess_type(upload_path)
         if mime_type is None:
             mime_type = "audio/mpeg"
+        print(f"Detected MIME type: {mime_type}")
         
         # Read audio
-        with open(upload_path, 'rb') as f:
-            audio_bytes = f.read()
+        try:
+            with open(upload_path, 'rb') as f:
+                audio_bytes = f.read()
+            print(f"Successfully read {len(audio_bytes)} bytes from {upload_path}")
+        except Exception as e:
+            raise Exception(f"Failed to read audio file: {str(e)}")
         
-        # Call Gemini for transcription
-        response = corrector.models.generate_content(
-            model='gemini-2.5-pro',
-            config=types.GenerateContentConfig(
-                system_instruction='''
-                Please transcribe the provided audio into proper SRT format. Don't start with : ```srt and just directly return the SRT content.
-                You may use this example as a guide:
-                1
-                00:00:01,000 --> 00:00:05,000
-                Hello, this is an example of SRT format.
+        if len(audio_bytes) == 0:
+            raise Exception("Audio file contains no data")
+        
+        # Call Gemini for transcription with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"Gemini API attempt {attempt + 1}/{max_retries} for job {job_id}")
+                response = pro.models.generate_content(
+                    model='gemini-2.5-pro',
+                    config=types.GenerateContentConfig(
+                        system_instruction='''
+                        Please transcribe the provided audio into proper SRT format. Don't start with : ```srt and just directly return the SRT content.
+                        You may use this example as a guide:
+                        1
+                        00:00:01,000 --> 00:00:05,000
+                        Hello, this is an example of SRT format.
 
 
-                or just like this : 
-                1
-                00:00:20,534 --> 00:00:24,244
-                Assalamualaikum warahmatullahi wabarakatuh.
+                        or just like this : 
+                        1
+                        00:00:20,534 --> 00:00:24,244
+                        Assalamualaikum warahmatullahi wabarakatuh.
 
-                2
-                00:00:24,714 --> 00:00:28,324
-                Waalaikumsalam warahmatullahi wabarakatuh.
+                        2
+                        00:00:24,714 --> 00:00:28,324
+                        Waalaikumsalam warahmatullahi wabarakatuh.
 
-                3
-                00:00:44,064 --> 00:00:45,694
-                By the way, abis ini kalian mau lanjut ke mana?
+                        3
+                        00:00:44,064 --> 00:00:45,694
+                        By the way, abis ini kalian mau lanjut ke mana?
 
-                4
-                00:00:46,244 --> 00:00:48,344
-                Kalau gue sih mau lanjutin ke UI ya, rencananya.
+                        4
+                        00:00:46,244 --> 00:00:48,344
+                        Kalau gue sih mau lanjutin ke UI ya, rencananya.
 
-                5
-                00:00:48,824 --> 00:00:51,194
-                Wow. Uh. Kalau gue mau ke ITB.
+                        5
+                        00:00:48,824 --> 00:00:51,194
+                        Wow. Uh. Kalau gue mau ke ITB.
 
-                6
-                00:00:52,994 --> 00:00:54,084
-                Kalau lu, lanjut ke mana?
+                        6
+                        00:00:52,994 --> 00:00:54,084
+                        Kalau lu, lanjut ke mana?
 
-                7
-                00:00:54,344 --> 00:00:58,684
-                Gue sih belum tahu ya mau ke mana, tapi gue pengen ngambil bisnis manajemen supaya gue bisa ngelanjutin usaha bokap.
+                        7
+                        00:00:54,344 --> 00:00:58,684
+                        Gue sih belum tahu ya mau ke mana, tapi gue pengen ngambil bisnis manajemen supaya gue bisa ngelanjutin usaha bokap.
 
-                8
-                00:00:58,954 --> 00:01:00,774
-                Keren keren. Keren ya. Keren.
+                        8
+                        00:00:58,954 --> 00:01:00,774
+                        Keren keren. Keren ya. Keren.
 
-                9
-                00:01:02,174 --> 00:01:04,264
-                Ton. Lu mau lanjut kuliah ke mana?
+                        9
+                        00:01:02,174 --> 00:01:04,264
+                        Ton. Lu mau lanjut kuliah ke mana?
 
-                Don't make this kind of mistake, always ensure that the timecodes are correct and the text is properly formatted.
-                8
-                00:00:58,954 --> 01:00:44,084
-                Keren-keren ya? Keren-keren ya?
-                There's no way that from 58 seconds to 1 hour and 44 seconds, there is no way that the text is still the same.
-                You need to break it down into smaller segments. Please always remember that the miliseconds should contain 3 digits.
+                        Don't make this kind of mistake, always ensure that the timecodes are correct and the text is properly formatted.
+                        8
+                        00:00:58,954 --> 01:00:44,084
+                        Keren-keren ya? Keren-keren ya?
+                        There's no way that from 58 seconds to 1 hour and 44 seconds, there is no way that the text is still the same.
+                        You need to break it down into smaller segments. Please always remember that the miliseconds should contain 3 digits.
 
-                and this one:
-                110
-                00:09:59,260 --> 01:00:21,290
-                Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
+                        and this one:
+                        110
+                        00:09:59,260 --> 01:00:21,290
+                        Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
 
-                So, the timecode is wrong, it should be 00:09:59,260 --> 00:10:21,290
+                        So, the timecode is wrong, it should be 00:09:59,260 --> 00:10:21,290
 
-                Ensure that there's no timecode mistake like this:
-                98
-                00:06:57,284 --> 00:06:57,844
-                Apapun.
+                        Ensure that there's no timecode mistake like this:
+                        98
+                        00:06:57,284 --> 00:06:57,844
+                        Apapun.
 
-                99
-                07:07:27,510 --> 07:07:31,810
-                Bapak, Bapak, Nak.
+                        99
+                        07:07:27,510 --> 07:07:31,810
+                        Bapak, Bapak, Nak.
+                        
+                        There's no way that from 6 minutes and 57 seconds jump to 7 hours and 7 minutes. it should be 00:07:27,510 --> 00:07:31,810
+                        And this one : 
+                        119
+                        00:08:58,450 --> 00:08:59,000
+                        Bapak janji.
+
+                        120
+                        01:00:19,260 --> 01:00:21,290
+                        Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
+                        There's no way that from 8 minutes and 58 seconds jump to 1 hour and 0 minutes, it should be 00:08:58,450 --> 00:08:59,000
+
+                        Once again, timecodes should be in the format of HH:MM:SS,mmm where mmm is milliseconds.
+                        ''',
+                        thinking_config=types.ThinkingConfig(thinking_budget=-1)
+                    ),
+                    contents=[
+                        types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+                    ]
+                )
+                print(f"Gemini API call successful for job {job_id} on attempt {attempt + 1}")
+                break  # Success, exit retry loop
                 
-                There's no way that from 6 minutes and 57 seconds jump to 7 hours and 7 minutes. it should be 00:07:27,510 --> 00:07:31,810
-                And this one : 
-                119
-                00:08:58,450 --> 00:08:59,000
-                Bapak janji.
-
-                120
-                01:00:19,260 --> 01:00:21,290
-                Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
-                There's no way that from 8 minutes and 58 seconds jump to 1 hour and 0 minutes, it should be 00:08:58,450 --> 00:08:59,000
-
-                Once again, timecodes should be in the format of HH:MM:SS,mmm where mmm is milliseconds.
-                ''',
-                thinking_config=types.ThinkingConfig(thinking_budget=-1)
-            ),
-            contents=[
-                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
-            ]
-        )
+            except Exception as api_error:
+                print(f"Gemini API attempt {attempt + 1} failed for job {job_id}: {str(api_error)}")
+                if attempt == max_retries - 1:  # Last attempt
+                    raise Exception(f"Gemini API call failed after {max_retries} attempts: {str(api_error)}")
+                else:
+                    # Wait before retry (exponential backoff)
+                    wait_time = (2 ** attempt) * 5  # 5, 10, 20 seconds
+                    print(f"Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
         
         raw_transcript = response.text if response and response.text else None
         if not raw_transcript or not raw_transcript.strip():
-            raise Exception("No transcript text returned")
+            raise Exception("No transcript text returned from Gemini")
         
-        # Update status to correcting
+        print(f"Received transcript for job {job_id}, length: {len(raw_transcript)} characters")
+        
         with processing_lock:
             processing_status[job_id]['status'] = STATUS_CORRECTING
             processing_status[job_id]['correction_started_at'] = datetime.now()
         
-        # Use corrector to fix transcription issues
         print(f"Starting correction for job {job_id}")
-        corrected_transcript = correct_transcript(raw_transcript.strip())
+        try:
+            corrected_transcript = correct_transcript(raw_transcript.strip())
+            print(f"Correction completed for job {job_id}")
+        except Exception as e:
+            raise Exception(f"Transcript correction failed: {str(e)}")
         
-        # Save corrected transcript
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(corrected_transcript)
+        # Write to output file
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(corrected_transcript)
+            print(f"Written output file: {output_path}")
+        except Exception as e:
+            raise Exception(f"Failed to write output file: {str(e)}")
         
-        # Delete uploaded file after processing
+        # Clean up upload file
         try:
             os.remove(upload_path)
             print(f"Cleaned up uploaded file: {upload_path}")
         except Exception as e:
             print(f"Warning: Could not clean up uploaded file {upload_path}: {e}")
         
-        # Get the output filename for the URL
         output_filename = os.path.basename(output_path)
         
-        # Update status
         with processing_lock:
             processing_status[job_id]['status'] = STATUS_COMPLETED
             processing_status[job_id]['completed_at'] = datetime.now()
             processing_status[job_id]['srt_url'] = f"/outputs/{output_filename}"
-            processing_status[job_id]['output_path'] = output_path  # Store for cleanup
+            processing_status[job_id]['output_path'] = output_path
             processing_status[job_id]['correction_completed'] = True
+        
+        print(f"Job {job_id} completed successfully")
+        
+        # Check if this is a chunk and if we need to merge
+        if '_chunk_' in job_id:
+            original_job_id = job_id.rsplit('_chunk_', 1)[0]
+            print(f"Chunk {job_id} completed, checking for merge with original job {original_job_id}")
+            # Run merge check in a separate thread to avoid blocking the worker
+            merge_thread = threading.Thread(target=check_and_merge_chunks, args=(original_job_id,), daemon=True)
+            merge_thread.start()
             
     except Exception as e:
-        # Clean up upload file on error
+        error_msg = f"Error processing job {job_id}: {str(e)}"
+        print(error_msg)
+        print(f"Full error details: {repr(e)}")
+        
         try:
             if os.path.exists(upload_path):
                 os.remove(upload_path)
+                print(f"Cleaned up failed upload file: {upload_path}")
         except:
             pass
             
         with processing_lock:
-            processing_status[job_id]['status'] = STATUS_ERROR
-            processing_status[job_id]['error'] = str(e)
-            processing_status[job_id]['completed_at'] = datetime.now()
+            if job_id in processing_status:
+                processing_status[job_id]['status'] = STATUS_ERROR
+                processing_status[job_id]['error'] = str(e)
+                processing_status[job_id]['completed_at'] = datetime.now()
+        
+        # If this is a chunk that failed, we should handle the original job too
+        if '_chunk_' in job_id:
+            original_job_id = job_id.rsplit('_chunk_', 1)[0]
+            print(f"Chunk {job_id} failed, will check original job {original_job_id}")
+            check_and_merge_chunks(original_job_id)  # This will handle the error case
+
+def split_audio_file(file_path, chunk_size=CHUNK_SIZE):
+    """
+    Split an audio file into chunks of specified size.
+    Returns a list of chunk file paths.
+    """
+    file_size = os.path.getsize(file_path)
+    
+    if file_size <= chunk_size:
+        return [file_path]  
+    
+    chunks = []
+    chunk_count = math.ceil(file_size / chunk_size)
+    
+    base_name = os.path.splitext(file_path)[0]
+    file_ext = os.path.splitext(file_path)[1]
+    
+    with open(file_path, 'rb') as source_file:
+        for i in range(chunk_count):
+            chunk_filename = f"{base_name}_chunk_{i+1}{file_ext}"
+            
+            with open(chunk_filename, 'wb') as chunk_file:
+                remaining_bytes = min(chunk_size, file_size - (i * chunk_size))
+                chunk_data = source_file.read(remaining_bytes)
+                chunk_file.write(chunk_data)
+            
+            chunks.append(chunk_filename)
+    
+    os.remove(file_path)
+    
+    return chunks
 
 def queue_worker():
     """Background worker to process queued files"""
@@ -281,68 +589,143 @@ def upload_files():
         return jsonify({"error": "No files part"}), 400
     
     files = request.files.getlist('files')
-    custom_names = request.form.getlist('filenames')  # Array of custom names
     
     if not files or len(files) == 0:
-        return jsonify({"error": "No files provided"}), 400
+        return jsonify({"error": "No file provided"}), 400
     
-    if len(files) > 5:
-        return jsonify({"error": "Maximum 5 files allowed"}), 400
+    if len(files) > 1:
+        return jsonify({"error": "Only one file upload is allowed"}), 400
     
-    job_ids = []
+    file = files[0]  
     
-    for i, file in enumerate(files):
-        if file.filename == '':
-            continue
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+    
+    allowed_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.wma'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        return jsonify({"error": f"File type {file_ext} not supported. Allowed types: {', '.join(allowed_extensions)}"}), 400
+    
+    custom_names = request.form.getlist('filenames')
+    custom_name = custom_names[0] if custom_names and custom_names[0] else None
+    
+    job_id = str(uuid.uuid4())
+    
+    if custom_name:
+        base_name = os.path.splitext(custom_name)[0]
+    else:
+        base_name = os.path.splitext(file.filename)[0]
+    
+    safe_name = secure_filename(base_name.replace(" ", "_"))
+    upload_filename = f"{job_id}_{safe_name}{file_ext}"
+    upload_path = os.path.join(UPLOAD_FOLDER, upload_filename)
+    
+    file.save(upload_path)
+    
+    # Get file size
+    file_size = os.path.getsize(upload_path)
+    
+    try:
+        chunk_paths = split_audio_file(upload_path)
+        
+        if len(chunk_paths) > 1:
+            # Store chunk group information for merging later
+            with processing_lock:
+                chunk_groups[job_id] = {
+                    'total_chunks': len(chunk_paths),
+                    'filename': file.filename,
+                    'custom_name': custom_name,
+                    'safe_name': safe_name,
+                    'original_file_size': file_size
+                }
+                
+                # Initialize original job status
+                processing_status[job_id] = {
+                    'status': STATUS_QUEUED,
+                    'filename': file.filename,
+                    'custom_name': custom_name,
+                    'safe_name': safe_name,
+                    'queued_at': datetime.now(),
+                    'file_size': file_size,
+                    'original_job': True,
+                    'total_chunks': len(chunk_paths),
+                    'chunks_processing': True
+                }
+        
+        job_ids = []
+        
+        for i, chunk_path in enumerate(chunk_paths):
+            if len(chunk_paths) > 1:
+                chunk_job_id = f"{job_id}_chunk_{i+1}"
+                output_filename = f"{safe_name}_chunk_{i+1}.srt"
+            else:
+                chunk_job_id = job_id
+                output_filename = f"{safe_name}.srt"
             
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())
+            output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+            
+            # Only add individual chunk status if there are multiple chunks
+            if len(chunk_paths) > 1:
+                with processing_lock:
+                    processing_status[chunk_job_id] = {
+                        'status': STATUS_QUEUED,
+                        'filename': file.filename,
+                        'custom_name': custom_name,
+                        'safe_name': safe_name,
+                        'queued_at': datetime.now(),
+                        'file_size': os.path.getsize(chunk_path),
+                        'chunk_info': {
+                            'is_chunk': True,
+                            'chunk_number': i + 1,
+                            'total_chunks': len(chunk_paths),
+                            'original_file_size': file_size,
+                            'original_job_id': job_id
+                        }
+                    }
+            else:
+                # Single file, no chunking
+                with processing_lock:
+                    processing_status[job_id] = {
+                        'status': STATUS_QUEUED,
+                        'filename': file.filename,
+                        'custom_name': custom_name,
+                        'safe_name': safe_name,
+                        'queued_at': datetime.now(),
+                        'file_size': file_size
+                    }
+            
+            processing_queue.put({
+                'job_id': chunk_job_id,
+                'upload_path': chunk_path,
+                'output_path': output_path,
+                'filename': os.path.basename(chunk_path)
+            })
+            
+            job_ids.append(chunk_job_id)
         
-        # Use custom filename if provided
-        custom_name = custom_names[i] if i < len(custom_names) and custom_names[i] else None
-        if custom_name:
-            base_name = os.path.splitext(custom_name)[0]
+        if len(chunk_paths) > 1:
+            return jsonify({
+                "message": f"File split into {len(chunk_paths)} chunks and queued for processing",
+                "job_id": job_id,  # Return the original job ID for tracking
+                "chunk_job_ids": job_ids,  # Individual chunk IDs for detailed tracking
+                "original_file_size": file_size,
+                "chunk_count": len(chunk_paths),
+                "chunk_size_mb": CHUNK_SIZE / (1024 * 1024),
+                "note": "Track progress using the main job_id. Chunks will be automatically merged when complete."
+            })
         else:
-            base_name = os.path.splitext(file.filename)[0]
+            return jsonify({
+                "message": "File queued for processing",
+                "job_id": job_id,
+                "file_size": file_size
+            })
+            
+    except Exception as e:
+        # Clean up uploaded file if chunking fails
+        if os.path.exists(upload_path):
+            os.remove(upload_path)
         
-        # Ensure safe filename
-        safe_name = base_name.replace(" ", "_")
-        file_ext = os.path.splitext(file.filename)[1]
-        upload_filename = f"{job_id}_{safe_name}{file_ext}"
-        upload_path = os.path.join(UPLOAD_FOLDER, upload_filename)
-        
-        # Save uploaded file
-        file.save(upload_path)
-        
-        # Prepare output path - use the safe_name which is either custom or original
-        output_filename = f"{safe_name}.srt"
-        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-        
-        # Initialize job status
-        with processing_lock:
-            processing_status[job_id] = {
-                'status': STATUS_QUEUED,
-                'filename': file.filename,
-                'custom_name': custom_name,
-                'safe_name': safe_name,
-                'queued_at': datetime.now(),
-                'file_size': os.path.getsize(upload_path)
-            }
-        
-        # Add to processing queue
-        processing_queue.put({
-            'job_id': job_id,
-            'upload_path': upload_path,
-            'output_path': output_path,
-            'filename': file.filename
-        })
-        
-        job_ids.append(job_id)
-    
-    return jsonify({
-        "message": f"Successfully queued {len(job_ids)} files for processing",
-        "job_ids": job_ids
-    })
+        return jsonify({"error": f"Failed to process file: {str(e)}"}), 500
 
 @app.route('/status/<job_id>')
 def get_job_status(job_id):
@@ -354,7 +737,7 @@ def get_job_status(job_id):
         status_data = processing_status[job_id].copy()
     
     # Convert datetime objects to strings
-    for key in ['queued_at', 'started_at', 'completed_at']:
+    for key in ['queued_at', 'started_at', 'completed_at', 'correction_started_at']:
         if key in status_data and status_data[key]:
             status_data[key] = status_data[key].isoformat()
     
@@ -441,11 +824,13 @@ def queue_info():
         processing_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_PROCESSING)
         completed_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_COMPLETED)
         error_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_ERROR)
+        merging_count = sum(1 for status in processing_status.values() if status['status'] == STATUS_MERGING)
     
     return jsonify({
         "queue_size": processing_queue.qsize(),
         "queued": queued_count,
         "processing": processing_count,
+        "merging": merging_count,
         "completed": completed_count,
         "error": error_count
     })
@@ -492,6 +877,15 @@ def cleanup_old_files():
         
         for job_id in jobs_to_remove:
             del processing_status[job_id]
+        
+        # Also clean old chunk groups
+        chunk_groups_to_remove = []
+        for group_id in chunk_groups.keys():
+            if group_id not in processing_status:
+                chunk_groups_to_remove.append(group_id)
+        
+        for group_id in chunk_groups_to_remove:
+            del chunk_groups[group_id]
     
     return jsonify({
         "message": f"Cleanup completed",
@@ -533,6 +927,15 @@ def scheduled_cleanup():
                 
                 for job_id in jobs_to_remove:
                     del processing_status[job_id]
+                
+                # Clean old chunk groups
+                chunk_groups_to_remove = []
+                for group_id in chunk_groups.keys():
+                    if group_id not in processing_status:
+                        chunk_groups_to_remove.append(group_id)
+                
+                for group_id in chunk_groups_to_remove:
+                    del chunk_groups[group_id]
             
             if cleaned_count > 0 or jobs_to_remove:
                 print(f"Scheduled cleanup: {cleaned_count} files, {len(jobs_to_remove)} job statuses")
