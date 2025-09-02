@@ -62,7 +62,6 @@ class ChunkGroup:
 
 class JobStatusManager:
     """Thread-safe job status manager"""
-    
     def __init__(self):
         self._processing_status: Dict[str, JobStatus] = {}
         self._chunk_groups: Dict[str, ChunkGroup] = {}
