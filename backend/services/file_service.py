@@ -1,21 +1,20 @@
 import os
 import math
+import mimetypes
 from typing import List, Optional, Tuple
 from werkzeug.utils import secure_filename
 from pydub import AudioSegment
 from config import Config
 
 class FileService:
-    """Service for handling file operations including chunking, validation, and format conversion"""
+    """Service for handling file operations including chunking, validation, format conversion, and file I/O"""
     
-    @staticmethod
-    def validate_file_type(filename: str) -> bool:
+    def validate_file_type(self, filename: str) -> bool:
         """Validate if file type is allowed"""
         file_ext = os.path.splitext(filename)[1].lower()
         return file_ext in Config.ALLOWED_EXTENSIONS
     
-    @staticmethod
-    def generate_safe_filename(filename: str, custom_name: str = None) -> str:
+    def generate_safe_filename(self, filename: str, custom_name: str = None) -> str:
         """Generate safe filename for storage"""
         if custom_name:
             base_name = os.path.splitext(custom_name)[0]
@@ -24,8 +23,100 @@ class FileService:
         
         return secure_filename(base_name.replace(" ", "_"))
     
-    @staticmethod
-    def convert_to_mp3(input_path: str, output_path: str = None, bitrate: str = "192k") -> Optional[str]:
+    def file_exists(self, file_path: str) -> bool:
+        """Check if file exists"""
+        return os.path.exists(file_path)
+    
+    def get_file_size(self, file_path: str) -> int:
+        """Get file size in bytes"""
+        try:
+            return os.path.getsize(file_path)
+        except:
+            return 0
+    
+    def validate_file_exists_and_not_empty(self, file_path: str) -> None:
+        """
+        Validate that file exists and is not empty.
+        Raises Exception if file doesn't exist or is empty.
+        """
+        if not FileService.file_exists(file_path):
+            raise Exception(f"File not found: {file_path}")
+        
+        file_size = FileService.get_file_size(file_path)
+        if file_size == 0:
+            raise Exception(f"File is empty: {file_path}")
+        
+        print(f"File validation passed: {file_path} ({file_size} bytes)")
+    
+    def detect_mime_type(self, file_path: str, default_mime: str = "audio/mpeg") -> str:
+        """
+        Detect MIME type of file, with fallback to default.
+        
+        Args:
+            file_path: Path to the file
+            default_mime: Default MIME type if detection fails
+            
+        Returns:
+            Detected or default MIME type
+        """
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type is None:
+            mime_type = default_mime
+        print(f"Detected MIME type for {file_path}: {mime_type}")
+        return mime_type
+    
+    def read_file_bytes(self, file_path: str) -> bytes:
+        """
+        Read file as bytes with proper error handling.
+        
+        Args:
+            file_path: Path to the file to read
+            
+        Returns:
+            File content as bytes
+            
+        Raises:
+            Exception if file cannot be read or is empty
+        """
+        try:
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
+            
+            if len(file_bytes) == 0:
+                raise Exception(f"File contains no data: {file_path}")
+            
+            print(f"Successfully read {len(file_bytes)} bytes from {file_path}")
+            return file_bytes
+            
+        except Exception as e:
+            raise Exception(f"Failed to read file {file_path}: {str(e)}")
+    
+    def read_audio_for_processing(self, file_path: str) -> Tuple[bytes, str]:
+        """
+        Complete audio file reading workflow for processing.
+        Validates file, detects MIME type, and reads bytes.
+        
+        Args:
+            file_path: Path to the audio file
+            
+        Returns:
+            Tuple of (file_bytes, mime_type)
+            
+        Raises:
+            Exception if any validation or reading step fails
+        """
+        # Validate file exists and is not empty
+        FileService.validate_file_exists_and_not_empty(file_path)
+        
+        # Detect MIME type
+        mime_type = FileService.detect_mime_type(file_path)
+        
+        # Read file bytes
+        file_bytes = FileService.read_file_bytes(file_path)
+        
+        return file_bytes, mime_type
+    
+    def convert_to_mp3(self, input_path: str, output_path: str = None, bitrate: str = "192k") -> Optional[str]:
         """
         Convert any supported audio file to MP3 format.
         
@@ -39,7 +130,7 @@ class FileService:
         """
         try:
             # Check if input file exists
-            if not os.path.exists(input_path):
+            if not FileService.file_exists(input_path):
                 print(f"Input file does not exist: {input_path}")
                 return None
             
@@ -87,8 +178,7 @@ class FileService:
             print(f"Error converting {input_path} to MP3: {str(e)}")
             return None
     
-    @staticmethod
-    def convert_and_replace(file_path: str, bitrate: str = "192k") -> Optional[str]:
+    def convert_and_replace(self, file_path: str, bitrate: str = "192k") -> Optional[str]:
         """
         Convert audio file to MP3 and replace the original file.
         
@@ -124,8 +214,7 @@ class FileService:
             print(f"Error in convert_and_replace for {file_path}: {str(e)}")
             return None
     
-    @staticmethod
-    def ensure_mp3_format(file_path: str, keep_original: bool = False) -> Tuple[Optional[str], bool]:
+    def ensure_mp3_format(self, file_path: str, keep_original: bool = False) -> Tuple[Optional[str], bool]:
         """
         Ensure the audio file is in MP3 format. Convert if necessary.
         
@@ -139,18 +228,15 @@ class FileService:
         try:
             input_ext = os.path.splitext(file_path)[1].lower()
             
-            # If already MP3, return as-is
             if input_ext == '.mp3':
                 return file_path, False
             
-            # Convert to MP3
             base_name = os.path.splitext(file_path)[0]
             mp3_path = f"{base_name}.mp3"
             
             converted_path = FileService.convert_to_mp3(file_path, mp3_path)
             
             if converted_path:
-                # Clean up original file if requested
                 if not keep_original:
                     FileService.cleanup_file(file_path)
                 return converted_path, True
@@ -161,8 +247,7 @@ class FileService:
             print(f"Error ensuring MP3 format for {file_path}: {str(e)}")
             return None, False
     
-    @staticmethod  
-    def split_audio_file(file_path: str, chunk_size: int = None) -> List[str]:
+    def split_audio_file(self, file_path: str, chunk_size: int = None) -> List[str]:
         """
         Split an audio file into a specified number of equal chunks.
         Returns a list of chunk file paths.
@@ -172,7 +257,7 @@ class FileService:
         if chunk_size is None:
             chunk_size = Config.CHUNK_SIZE
         
-        total_size = os.path.getsize(file_path)
+        total_size = FileService.get_file_size(file_path)
         duration_ms = len(audio)
         bytes_per_ms = total_size / duration_ms
 
@@ -189,11 +274,10 @@ class FileService:
 
         return chunks
         
-    @staticmethod
-    def cleanup_file(file_path: str) -> bool:
+    def cleanup_file(self, file_path: str) -> bool:
         """Safely remove a file"""
         try:
-            if os.path.exists(file_path):
+            if FileService.file_exists(file_path):
                 os.remove(file_path)
                 print(f"Cleaned up file: {file_path}")
                 return True
@@ -202,8 +286,7 @@ class FileService:
             print(f"Warning: Could not clean up file {file_path}: {e}")
             return False
     
-    @staticmethod
-    def save_transcript(content: str, output_path: str) -> bool:
+    def save_transcript(self, content: str, output_path: str) -> bool:
         """Save transcript content to file"""
         try:
             with open(output_path, "w", encoding="utf-8") as f:
@@ -214,21 +297,7 @@ class FileService:
             print(f"Failed to write output file {output_path}: {str(e)}")
             return False
     
-    @staticmethod
-    def file_exists(file_path: str) -> bool:
-        """Check if file exists"""
-        return os.path.exists(file_path)
-    
-    @staticmethod
-    def get_file_size(file_path: str) -> int:
-        """Get file size in bytes"""
-        try:
-            return os.path.getsize(file_path)
-        except:
-            return 0
-    
-    @staticmethod
-    def get_audio_info(file_path: str) -> dict:
+    def get_audio_info(self, file_path: str) -> dict:
         """
         Get audio file information including duration, format, etc.
         
@@ -251,3 +320,5 @@ class FileService:
         except Exception as e:
             print(f"Error getting audio info for {file_path}: {str(e)}")
             return {}
+
+file_service = FileService()

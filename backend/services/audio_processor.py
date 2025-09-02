@@ -1,13 +1,12 @@
 import os
 import threading
-import queue
 from datetime import datetime
-from typing import List
 
 from models.job_status import job_manager, STATUS_PROCESSING, STATUS_COMPLETED, STATUS_ERROR, STATUS_CORRECTING
-from services.transcription_service import TranscriptionService
-from services.correction_service import CorrectionService
-from services.file_service import FileService
+from services.transcription_service import transcription_service
+from services.correction_service import correction_service
+from services.file_service import file_service
+from services.queue_service import queue_service  
 from utils.srt_utils import merge_srt_chunks
 from config import Config
 
@@ -15,19 +14,16 @@ class AudioProcessor:
     """Main audio processing orchestration service"""
     
     def __init__(self):
-        self.transcription_service = TranscriptionService()
-        self.correction_service = CorrectionService()
-        self.file_service = FileService()
+        pass
     
     def process_audio_file(self, job_data):
-        """Process a single audio file with correction and MP3 conversion"""
+        """Process a single audio file to create a transcribe of it with correction"""
         job_id = job_data['job_id']
         upload_path = job_data['upload_path']
         output_path = job_data['output_path']
         filename = job_data['filename']
         
         try:
-            # Update status to processing
             if not job_manager.update_job(job_id, status=STATUS_PROCESSING, started_at=datetime.now()):
                 raise Exception(f"Job {job_id} not found in processing status")
             
@@ -35,37 +31,21 @@ class AudioProcessor:
             print(f"Upload path: {upload_path}")
             print(f"Output path: {output_path}")
             
-            # Convert to MP3 if necessary
-            mp3_path, was_converted = self.file_service.ensure_mp3_format(upload_path, keep_original=False)
+            raw_transcript = transcription_service.transcribe_audio(upload_path, job_id)
             
-            if mp3_path is None:
-                raise Exception(f"Failed to convert audio file to MP3 format")
-            
-            if was_converted:
-                print(f"Converted audio file to MP3: {mp3_path}")
-                # Update the upload_path to point to the MP3 file
-                upload_path = mp3_path
-            
-            # Transcribe audio (now guaranteed to be MP3)
-            raw_transcript = self.transcription_service.transcribe_audio(upload_path, job_id)
-            
-            # Update status to correcting
             job_manager.update_job(job_id, status=STATUS_CORRECTING, correction_started_at=datetime.now())
             
             print(f"Starting correction for job {job_id}")
-            corrected_transcript = self.correction_service.correct_transcript(raw_transcript)
+            corrected_transcript = correction_service.correct_transcript(raw_transcript)
             print(f"Correction completed for job {job_id}")
             
-            # Save transcript
-            if not self.file_service.save_transcript(corrected_transcript, output_path):
+            if not file_service.save_transcript(corrected_transcript, output_path):
                 raise Exception("Failed to save transcript")
             
-            # Clean up upload file (MP3 version)
-            self.file_service.cleanup_file(upload_path)
+            file_service.cleanup_file(upload_path)
             
             output_filename = os.path.basename(output_path)
             
-            # Update status to completed
             job_manager.update_job(
                 job_id,
                 status=STATUS_COMPLETED,
@@ -95,7 +75,7 @@ class AudioProcessor:
             print(f"Full error details: {repr(e)}")
             
             # Clean up upload file on error
-            self.file_service.cleanup_file(upload_path)
+            file_service.cleanup_file(upload_path)
                 
             # Update job status to error
             job_manager.update_job(
@@ -110,88 +90,6 @@ class AudioProcessor:
                 original_job_id = job_id.rsplit('_chunk_', 1)[0]
                 print(f"Chunk {job_id} failed, will check original job {original_job_id}")
                 self.check_and_merge_chunks(original_job_id)
-    
-    def process_audio_file_with_chunking(self, job_data):
-        """Process an audio file by splitting it into chunks first, then converting each to MP3"""
-        job_id = job_data['job_id']
-        upload_path = job_data['upload_path']
-        filename = job_data['filename']
-        
-        try:
-            # Update status to processing
-            if not job_manager.update_job(job_id, status=STATUS_PROCESSING, started_at=datetime.now()):
-                raise Exception(f"Job {job_id} not found in processing status")
-            
-            print(f"Processing job with chunking {job_id}: {filename}")
-            print(f"Upload path: {upload_path}")
-            
-            # Get audio info before processing
-            audio_info = self.file_service.get_audio_info(upload_path)
-            print(f"Audio info: {audio_info}")
-            
-            # Convert to MP3 first if necessary
-            mp3_path, was_converted = self.file_service.ensure_mp3_format(upload_path, keep_original=False)
-            
-            if mp3_path is None:
-                raise Exception(f"Failed to convert audio file to MP3 format")
-            
-            if was_converted:
-                print(f"Converted audio file to MP3: {mp3_path}")
-                upload_path = mp3_path
-            
-            # Split the MP3 file into chunks
-            print(f"Splitting audio file into chunks...")
-            chunk_paths = self.file_service.split_audio_file(upload_path)
-            
-            if not chunk_paths:
-                raise Exception("Failed to split audio file into chunks")
-            
-            print(f"Split into {len(chunk_paths)} chunks")
-            
-            # Register chunk group
-            job_manager.add_chunk_group(job_id, len(chunk_paths), filename)
-            
-            # Queue each chunk for processing
-            for i, chunk_path in enumerate(chunk_paths, 1):
-                chunk_job_id = f"{job_id}_chunk_{i}"
-                chunk_output_path = os.path.join(Config.OUTPUT_FOLDER, f"{job_id}_chunk_{i}.srt")
-                
-                chunk_job_data = {
-                    'job_id': chunk_job_id,
-                    'upload_path': chunk_path,
-                    'output_path': chunk_output_path,
-                    'filename': f"{filename}_chunk_{i}"
-                }
-                
-                # Add chunk job to status tracking
-                job_manager.add_job(
-                    chunk_job_id,
-                    f"{filename}_chunk_{i}",
-                    chunk_path,
-                    chunk_output_path
-                )
-                
-                # Process chunk immediately (or add to queue if using a queue system)
-                self.process_audio_file(chunk_job_data)
-            
-            # Clean up the original MP3 file after chunking
-            self.file_service.cleanup_file(upload_path)
-            
-        except Exception as e:
-            error_msg = f"Error processing chunked job {job_id}: {str(e)}"
-            print(error_msg)
-            print(f"Full error details: {repr(e)}")
-            
-            # Clean up upload file on error
-            self.file_service.cleanup_file(upload_path)
-            
-            # Update job status to error
-            job_manager.update_job(
-                job_id,
-                status=STATUS_ERROR,
-                error=str(e),
-                completed_at=datetime.now()
-            )
     
     def check_and_merge_chunks(self, original_job_id: str) -> bool:
         """Check if all chunks for a job are completed and merge them"""
@@ -300,26 +198,6 @@ class AudioProcessor:
                 completed_at=datetime.now()
             )
             return False
-    
-    def _queue_worker(self, worker_function):
-        """Background worker to process queued files"""
-        while True:
-            try:
-                job_data = self.processing_queue.get(timeout=1)
-                if job_data is None:  # Shutdown signal
-                    break
-                    
-                # Call the worker function with job data
-                worker_function(job_data)
-                self.processing_queue.task_done()
-                
-            except queue.Empty:
-                if self._shutdown:
-                    break
-                continue
-            except Exception as e:
-                print(f"Queue worker error: {e}")
-                try:
-                    self.processing_queue.task_done()
-                except:
-                    pass
+
+# Create global instance
+audio_processor = AudioProcessor()

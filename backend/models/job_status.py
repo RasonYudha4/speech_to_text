@@ -40,7 +40,7 @@ class JobStatus:
     original_job: Optional[bool] = None
     total_chunks: Optional[int] = None
     chunks_processing: Optional[bool] = None
-    chunk_info: Optional[ChunkInfo] = None
+    chunk_statuses: Dict[str, Dict[str, Any]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary with datetime serialization"""

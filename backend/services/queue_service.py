@@ -39,7 +39,6 @@ class QueueService:
     def shutdown(self):
         """Shutdown all worker threads"""
         self._shutdown = True
-        # Send shutdown signals
         for _ in self.worker_threads:
             self.processing_queue.put(None)
     
@@ -48,10 +47,9 @@ class QueueService:
         while True:
             try:
                 job_data = self.processing_queue.get(timeout=1)
-                if job_data is None:  # Shutdown signal
+                if job_data is None:  
                     break
                     
-                # Call the worker function with job data
                 worker_function(job_data)
                 self.processing_queue.task_done()
                 
@@ -63,5 +61,4 @@ class QueueService:
                 print(f"Queue worker error: {e}")
                 self.processing_queue.task_done()
 
-# Global instance
 queue_service = QueueService()

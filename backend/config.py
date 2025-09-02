@@ -13,7 +13,7 @@ class Config:
     OUTPUT_FOLDER = "outputs"
     
     # File processing settings
-    CHUNK_SIZE = 200 * 1024 * 1024  # 25MB
+    CHUNK_SIZE = 200 * 1024 * 1024  # 200MB
     ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.wma'}
     
     # Processing settings

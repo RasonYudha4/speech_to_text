@@ -78,3 +78,5 @@ class CorrectionService:
         00:00:03,137 --> 00:00:19,267
         [music]
         '''
+    
+correction_service = CorrectionService()

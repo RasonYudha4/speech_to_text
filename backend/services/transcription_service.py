@@ -1,49 +1,26 @@
-import os
-import mimetypes
+
 import time
 from google import genai
 from google.genai import types
 from config import Config
+from services.file_service import file_service
 
 class TranscriptionService:
     """Service for handling audio transcription using Gemini API"""
     
     def __init__(self):
-        self.client = genai.Client(api_key=Config.GOOGLE_API_KEY2)  # Use pro client
+        self.client = genai.Client(api_key=Config.GOOGLE_API_KEY2)
         self.max_retries = Config.MAX_RETRIES
         self.retry_wait_base = Config.RETRY_WAIT_BASE
     
     def transcribe_audio(self, audio_path: str, job_id: str) -> str:
         """Transcribe audio file to SRT format using Gemini API"""
-        # Check if upload file exists
-        if not os.path.exists(audio_path):
-            raise Exception(f"Upload file not found: {audio_path}")
         
-        # Check file size
-        file_size = os.path.getsize(audio_path)
-        print(f"Processing file size: {file_size} bytes")
-        
-        if file_size == 0:
-            raise Exception("Upload file is empty")
-        
-        # Detect MIME type
-        mime_type, _ = mimetypes.guess_type(audio_path)
-        if mime_type is None:
-            mime_type = "audio/mpeg"
-        print(f"Detected MIME type: {mime_type}")
-        
-        # Read audio
         try:
-            with open(audio_path, 'rb') as f:
-                audio_bytes = f.read()
-            print(f"Successfully read {len(audio_bytes)} bytes from {audio_path}")
+            audio_bytes, mime_type = file_service.read_audio_for_processing(audio_path)
         except Exception as e:
-            raise Exception(f"Failed to read audio file: {str(e)}")
+            raise Exception(f"File processing error: {str(e)}")
         
-        if len(audio_bytes) == 0:
-            raise Exception("Audio file contains no data")
-        
-        # Call Gemini for transcription with retry logic
         for attempt in range(self.max_retries):
             try:
                 print(f"Gemini API attempt {attempt + 1}/{self.max_retries} for job {job_id}")
@@ -54,18 +31,18 @@ class TranscriptionService:
                         thinking_config=types.ThinkingConfig(thinking_budget=-1)
                     ),
                     contents=[
+                        "This is an Indonesian series dialogue audio about a cheating husband named Aris and his wife named Nisa. You need to also detect the other speakers",
                         types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
                     ]
                 )
                 print(f"Gemini API call successful for job {job_id} on attempt {attempt + 1}")
-                break  # Success, exit retry loop
+                break  
                 
             except Exception as api_error:
                 print(f"Gemini API attempt {attempt + 1} failed for job {job_id}: {str(api_error)}")
-                if attempt == self.max_retries - 1:  # Last attempt
+                if attempt == self.max_retries - 1:  
                     raise Exception(f"Gemini API call failed after {self.max_retries} attempts: {str(api_error)}")
                 else:
-                    # Wait before retry (exponential backoff)
                     wait_time = (2 ** attempt) * self.retry_wait_base
                     print(f"Waiting {wait_time} seconds before retry...")
                     time.sleep(wait_time)
@@ -158,5 +135,8 @@ class TranscriptionService:
         Alhamdulillah ya, Bu, ya. Laki-laki bayinya ya.
         There's no way that from 8 minutes and 58 seconds jump to 1 hour and 0 minutes, it should be 00:08:58,450 --> 00:08:59,000
 
+        There's a possibility that audio overlaps between 2 speakers so please make sure to write it down as it is and separate it with "-" before each sentence.
         Once again, timecodes should be in the format of HH:MM:SS,mmm where mmm is milliseconds and please be accurate about the text.
         '''
+    
+transcription_service = TranscriptionService()
