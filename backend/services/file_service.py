@@ -39,10 +39,10 @@ class FileService:
         Validate that file exists and is not empty.
         Raises Exception if file doesn't exist or is empty.
         """
-        if not FileService.file_exists(file_path):
+        if not self.file_exists(file_path):
             raise Exception(f"File not found: {file_path}")
         
-        file_size = FileService.get_file_size(file_path)
+        file_size = self.get_file_size(file_path)
         if file_size == 0:
             raise Exception(f"File is empty: {file_path}")
         
@@ -106,13 +106,13 @@ class FileService:
             Exception if any validation or reading step fails
         """
         # Validate file exists and is not empty
-        FileService.validate_file_exists_and_not_empty(file_path)
+        self.validate_file_exists_and_not_empty(file_path)
         
         # Detect MIME type
-        mime_type = FileService.detect_mime_type(file_path)
+        mime_type = self.detect_mime_type(file_path)
         
         # Read file bytes
-        file_bytes = FileService.read_file_bytes(file_path)
+        file_bytes = self.read_file_bytes(file_path)
         
         return file_bytes, mime_type
     
@@ -130,13 +130,13 @@ class FileService:
         """
         try:
             # Check if input file exists
-            if not FileService.file_exists(input_path):
+            if not self.file_exists(input_path):
                 print(f"Input file does not exist: {input_path}")
                 return None
             
             # Validate file type
             input_filename = os.path.basename(input_path)
-            if not FileService.validate_file_type(input_filename):
+            if not self.validate_file_type(input_filename):
                 print(f"Unsupported file type: {input_filename}")
                 return None
             
@@ -201,11 +201,11 @@ class FileService:
             mp3_path = f"{base_name}.mp3"
             
             # Convert to MP3
-            converted_path = FileService.convert_to_mp3(file_path, mp3_path, bitrate)
+            converted_path = self.convert_to_mp3(file_path, mp3_path, bitrate)
             
             if converted_path:
                 # Clean up original file
-                FileService.cleanup_file(file_path)
+                self.cleanup_file(file_path)
                 return converted_path
             else:
                 return None
@@ -234,11 +234,11 @@ class FileService:
             base_name = os.path.splitext(file_path)[0]
             mp3_path = f"{base_name}.mp3"
             
-            converted_path = FileService.convert_to_mp3(file_path, mp3_path)
+            converted_path = self.convert_to_mp3(file_path, mp3_path)
             
             if converted_path:
                 if not keep_original:
-                    FileService.cleanup_file(file_path)
+                    self.cleanup_file(file_path)
                 return converted_path, True
             else:
                 return None, False
@@ -257,7 +257,7 @@ class FileService:
         if chunk_size is None:
             chunk_size = Config.CHUNK_SIZE
         
-        total_size = FileService.get_file_size(file_path)
+        total_size = self.get_file_size(file_path)
         duration_ms = len(audio)
         bytes_per_ms = total_size / duration_ms
 
@@ -277,7 +277,7 @@ class FileService:
     def cleanup_file(self, file_path: str) -> bool:
         """Safely remove a file"""
         try:
-            if FileService.file_exists(file_path):
+            if self.file_exists(file_path):
                 os.remove(file_path)
                 print(f"Cleaned up file: {file_path}")
                 return True
@@ -306,7 +306,7 @@ class FileService:
         """
         try:
             audio = AudioSegment.from_file(file_path)
-            file_size = FileService.get_file_size(file_path)
+            file_size = self.get_file_size(file_path)
             
             return {
                 'duration_ms': len(audio),

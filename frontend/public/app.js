@@ -413,6 +413,172 @@ const JobList = {
 };
 
 /**
+ * Video Player Management
+ */
+const VideoPlayer = {
+    // DOM elements
+    videoUploadArea: null,
+    videoFileInput: null,
+    videoContainer: null,
+    videoPlayer: null,
+    videoInfo: null,
+    changeVideoBtn: null,
+
+    /**
+     * Initialize video player
+     */
+    init() {
+        this.videoUploadArea = document.getElementById("videoUploadArea");
+        this.videoFileInput = document.getElementById("videoFileInput");
+        this.videoContainer = document.getElementById("videoContainer");
+        this.videoPlayer = document.getElementById("videoPlayer");
+        this.videoInfo = document.getElementById("videoInfo");
+        this.changeVideoBtn = document.getElementById("changeVideoBtn");
+
+        this._setupEventListeners();
+    },
+
+    /**
+     * Setup event listeners
+     */
+    _setupEventListeners() {
+        // File input change
+        this.videoFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.handleVideoSelect(e.target.files[0]);
+            }
+        });
+
+        // Upload area click
+        this.videoUploadArea.addEventListener('click', () => {
+            this.videoFileInput.click();
+        });
+
+        // Drag and drop
+        this.videoUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            this.videoUploadArea.classList.add('dragover');
+        });
+
+        this.videoUploadArea.addEventListener('dragleave', () => {
+            this.videoUploadArea.classList.remove('dragover');
+        });
+
+        this.videoUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.videoUploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                this.handleVideoSelect(files[0]);
+            }
+        });
+
+        // Change video button
+        this.changeVideoBtn.addEventListener('click', () => {
+            this.videoFileInput.click();
+        });
+
+        // Video loaded metadata
+        this.videoPlayer.addEventListener('loadedmetadata', () => {
+            this._updateVideoInfo();
+        });
+    },
+
+    /**
+     * Handle video file selection
+     */
+    handleVideoSelect(file) {
+        // Validate file type
+        if (!file.type.startsWith('video/')) {
+            Utils.showError('Please select a valid video file.');
+            return;
+        }
+
+        // Create blob URL for the video
+        const videoUrl = URL.createObjectURL(file);
+        
+        // Set video source
+        this.videoPlayer.src = videoUrl;
+        
+        // Store file info
+        this.currentFile = file;
+        
+        // Update UI
+        this._updateUploadAreaState();
+        this._showVideoPlayer();
+        this._updateBasicInfo();
+
+        // Clean up previous blob URL
+        this.videoPlayer.addEventListener('loadstart', () => {
+            if (this.previousUrl) {
+                URL.revokeObjectURL(this.previousUrl);
+            }
+            this.previousUrl = videoUrl;
+        });
+    },
+
+    /**
+     * Update upload area state
+     */
+    _updateUploadAreaState() {
+        this.videoUploadArea.classList.add('has-video');
+        document.getElementById('videoUploadIcon').textContent = '✓';
+        document.getElementById('videoUploadText').textContent = 'Video loaded successfully';
+        document.getElementById('videoUploadSubtext').textContent = 'Click to select a different video';
+    },
+
+    /**
+     * Show video player
+     */
+    _showVideoPlayer() {
+        this.videoContainer.classList.add('show');
+    },
+
+    /**
+     * Update basic video info
+     */
+    _updateBasicInfo() {
+        document.getElementById('videoFileName').textContent = this.currentFile.name;
+        document.getElementById('videoFileSize').textContent = Utils.formatFileSize(this.currentFile.size);
+        document.getElementById('videoDuration').textContent = 'Loading...';
+        document.getElementById('videoResolution').textContent = 'Loading...';
+    },
+
+    /**
+     * Update video info when metadata is loaded
+     */
+    _updateVideoInfo() {
+        // Duration
+        const duration = this.videoPlayer.duration;
+        const formattedDuration = this._formatDuration(duration);
+        document.getElementById('videoDuration').textContent = formattedDuration;
+
+        // Resolution
+        const width = this.videoPlayer.videoWidth;
+        const height = this.videoPlayer.videoHeight;
+        document.getElementById('videoResolution').textContent = `${width} × ${height}`;
+    },
+
+    /**
+     * Format duration in MM:SS or HH:MM:SS format
+     */
+    _formatDuration(seconds) {
+        if (isNaN(seconds)) return 'Unknown';
+        
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        
+        if (hours > 0) {
+            return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        } else {
+            return `${minutes}:${secs.toString().padStart(2, '0')}`;
+        }
+    }
+};
+
+/**
  * Download Manager
  */
 const DownloadManager = {
@@ -638,6 +804,8 @@ const App = {
         
         // Initialize event handlers
         EventHandlers.init();
+
+        VideoPlayer.init();
         
         console.log('Batch Audio Transcription App initialized');
     }
