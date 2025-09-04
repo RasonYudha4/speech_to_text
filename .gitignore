@@ -1,3 +1,4 @@
 .env
 backend/outputs/
 backend/uploads/
+/deleteable

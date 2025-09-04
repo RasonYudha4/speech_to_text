@@ -1,7 +1,5 @@
-flask
-flask-cors
-google-genai
-gunicorn
-openai-whisper
-werkzeug
-pydub
+Flask==2.3.3
+Flask-CORS==4.0.0
+faster-whisper==0.10.0
+Werkzeug==2.3.7
+gunicorn==21.2.0
