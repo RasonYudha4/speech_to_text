@@ -35,53 +35,6 @@ function App() {
     return hours * 3600 + minutes * 60 + seconds + parseInt(ms) / 1000;
   };
 
-  // Convert seconds back to SRT timestamp format
-  const secondsToSRTTime = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-
-    return `${hours.toString().padStart(2, "0")}:${minutes
-      .toString()
-      .padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms
-      .toString()
-      .padStart(3, "0")}`;
-  };
-
-  // Convert plain text transcription to SRT format
-  const convertTranscriptionToSRT = (transcription, segmentLength = 5) => {
-    if (!transcription || !transcription.trim()) return [];
-
-    const words = transcription.trim().split(" ");
-    const wordsPerSegment = Math.max(
-      8,
-      Math.floor(
-        words.length / Math.max(1, Math.floor(transcription.length / 100))
-      )
-    );
-
-    const segments = [];
-    let currentTime = 0;
-
-    for (let i = 0; i < words.length; i += wordsPerSegment) {
-      const segmentWords = words.slice(i, i + wordsPerSegment);
-      const startTime = currentTime;
-      const endTime = startTime + segmentLength;
-
-      segments.push({
-        id: segments.length + 1,
-        start: secondsToSRTTime(startTime),
-        end: secondsToSRTTime(endTime),
-        text: segmentWords.join(" "),
-      });
-
-      currentTime = endTime;
-    }
-
-    return segments;
-  };
-
   // Generate SRT file content
   const generateSRTContent = () => {
     return srtData
@@ -151,9 +104,8 @@ function App() {
       return;
     }
 
-    // Check file size (100MB limit)
-    if (file.size > 100 * 1024 * 1024) {
-      setUploadError("File size must be less than 100MB");
+    if (file.size > 1000 * 1024 * 1024) {
+      setUploadError("File size must be less than 1GB");
       return;
     }
 
@@ -173,67 +125,64 @@ function App() {
           headers: {
             "Content-Type": "multipart/form-data",
           },
-          responseType: "blob", // Keep this for SRT file download
-          timeout: 600000, // 10 minutes
+          responseType: "blob",
+          timeout: 0,
           onUploadProgress: (progressEvent) => {
             const progress = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
+              (progressEvent.loaded * 70) / progressEvent.total
             );
             setUploadProgress(progress);
           },
         }
       );
 
-      setIsUploading(false);
-      setUploadSuccess(true);
+      setUploadProgress(85); 
 
-      // Handle SRT file download (this part is correct)
       const srtBlob = new Blob([response.data], {
         type: "text/plain;charset=utf-8",
       });
+
+      setUploadProgress(95); 
+
       const url = URL.createObjectURL(srtBlob);
 
-      // Create download link
       const link = document.createElement("a");
       link.href = url;
       link.download = file.name.replace(/\.[^/.]+$/, "") + "_transcription.srt";
 
-      // Trigger download
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      // Clean up
       URL.revokeObjectURL(url);
 
-      // Parse the SRT content to display in the UI
       const srtText = await srtBlob.text();
       const parsedSRT = parseSRT(srtText);
       setSrtData(parsedSRT);
 
-      // Set transcription from parsed segments
       const transcriptionText = parsedSRT
         .map((segment) => segment.text)
         .join(" ");
       setGeneratedTranscription(transcriptionText);
+
+      setUploadProgress(100);
+      setIsUploading(false);
+      setUploadSuccess(true);
     } catch (error) {
       setIsUploading(false);
 
       if (error.code === "ECONNABORTED") {
         setUploadError("Upload timed out. Please try again.");
       } else if (error.response) {
-        // Handle blob error responses properly
         if (error.response.data instanceof Blob) {
           try {
             const errorText = await error.response.data.text();
-            // Try to parse as JSON first
             try {
               const errorData = JSON.parse(errorText);
               setUploadError(
                 errorData.error || `Server error: ${error.response.status}`
               );
             } catch {
-              // If not JSON, use the text directly
               setUploadError(
                 errorText || `Server error: ${error.response.status}`
               );
@@ -255,7 +204,6 @@ function App() {
     }
   };
 
-  // Handle audio file selection
   const handleAudioFileSelect = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -264,7 +212,6 @@ function App() {
     }
   };
 
-  // Handle audio drag and drop
   const handleAudioDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
@@ -286,7 +233,6 @@ function App() {
     }
   };
 
-  // Find active subtitle based on current time
   useEffect(() => {
     if (srtData.length === 0) return;
 
@@ -1013,7 +959,7 @@ function App() {
 
             <div className="mt-8 text-center">
               <p className="text-gray-500 text-sm">
-                Maximum file size: 100MB • Processing time: varies by file size
+                Maximum file size: 1GB • Processing time: varies by file size
               </p>
               <p className="text-xs text-gray-600 mt-2">
                 Make sure your Flask server is running on http://localhost:5000
