@@ -28,8 +28,16 @@ def check_cuda_availability():
     """Check if CUDA is available and return appropriate device and compute type"""
     try:
         if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
             logger.info(f"CUDA is available. GPU count: {torch.cuda.device_count()}")
-            logger.info(f"GPU name: {torch.cuda.get_device_name(0)}")
+            logger.info(f"GPU name: {gpu_name}")
+
+            # Old GPUs (like GTX 1050 Ti) don’t support float16
+            if "1050" in gpu_name or "1060" in gpu_name or "1070" in gpu_name or "1080" in gpu_name:
+                logger.info("Detected Pascal GPU → using float32 instead of float16")
+                return "cuda", "float32"
+
+            # Modern GPUs → try float16
             return "cuda", "float16"
         else:
             logger.info("CUDA not available, falling back to CPU")
@@ -38,13 +46,14 @@ def check_cuda_availability():
         logger.warning(f"Error checking CUDA availability: {e}. Falling back to CPU")
         return "cpu", "int8"
 
+
 def initialize_model():
     """Initialize Whisper model with best available device"""
     try:
         device, compute_type = check_cuda_availability()
         
         logger.info(f"Initializing Whisper model with device: {device}, compute_type: {compute_type}")
-        model = WhisperModel("base", device=device, compute_type=compute_type)
+        model = WhisperModel("medium", device=device, compute_type=compute_type)
         
         logger.info("Whisper model loaded successfully")
         return model, device, compute_type
