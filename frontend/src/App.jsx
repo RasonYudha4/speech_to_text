@@ -75,14 +75,14 @@ function App() {
       // Create new WaveSurfer instance
       wavesurferRef.current = WaveSurfer.create({
         container: waveformRef.current,
-        waveColor: '#14203C',
-        progressColor: '#4c6397',
-        cursorColor: '#ffffff',
+        waveColor: "#14203C",
+        progressColor: "#4c6397",
+        cursorColor: "#ffffff",
         barWidth: 2,
         barRadius: 1,
         responsive: true,
         height: 80,
-        backend: 'MediaElement',
+        backend: "MediaElement",
         dragToSeek: true,
         minPxPerSec: 100,
         mediaControls: false,
@@ -92,12 +92,12 @@ function App() {
       wavesurferRef.current.load(videoUrl);
 
       // Sync waveform with video playback
-      wavesurferRef.current.on('ready', () => {
-        console.log('Waveform is ready');
+      wavesurferRef.current.on("ready", () => {
+        console.log("Waveform is ready");
       });
 
       // Handle waveform click to seek video
-      wavesurferRef.current.on('seek', (progress) => {
+      wavesurferRef.current.on("seek", (progress) => {
         if (videoRef.current) {
           const duration = videoRef.current.duration;
           const seekTime = progress * duration;
@@ -517,6 +517,22 @@ function App() {
     };
   }, [videoUrl]);
 
+  // Artificial data shaped like SubtitleFile model
+  const data = Array.from({ length: 23 }, (_, i) => ({
+    id: i + 1,
+    filename: `subtitle_file_${i + 1}.srt`,
+    editedBy: `editor_${(i % 5) + 1}`, // cycle through editors
+    createdAt: new Date(Date.now() - i * 86400000).toLocaleDateString("en-US"), // fake dates
+  }));
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 5;
+
+  // Pagination logic
+  const totalPages = Math.ceil(data.length / rowsPerPage);
+  const startIndex = (currentPage - 1) * rowsPerPage;
+  const currentData = data.slice(startIndex, startIndex + rowsPerPage);
+
   return (
     <>
       <div className="bg-[#14203C] min-h-screen p-8">
@@ -625,8 +641,8 @@ function App() {
                           Audio Waveform
                         </h3>
                       </div>
-                      <div 
-                        ref={waveformRef} 
+                      <div
+                        ref={waveformRef}
                         className="w-full bg-black bg-opacity-30 rounded"
                       />
                     </div>
@@ -872,12 +888,83 @@ function App() {
                   : "Download Updated SRT"}
               </button>
             </div>
-            <div className="">
+            <div>
               <h3 className=" text-lg text-white font-bold mb-4">
                 Editted Transcription Log
               </h3>
-              <div className=" bg-green-400 rounded-xl h-full">
+              <div className="bg-[#5f719b] rounded-xl">
+                <div className="rounded-xl shadow overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-[#253456] text-white">
+                      <tr>
+                        <th className="p-3 border-b text-center w-12">No</th>
+                        <th className="p-3 border-b">Details</th>
+                        <th className="p-3 border-b text-right">Created At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentData.map((item) => (
+                        <tr
+                          key={item.id}
+                          className="hover:bg-[#7686ad] hover:cursor-pointer"
+                        >
+                          <td className="p-3 border-b text-center">
+                            {item.id}
+                          </td>
 
+                          <td className="p-3 border-b">
+                            <div className="flex flex-col">
+                              <span className="font-semibold">
+                                {item.filename}
+                              </span>
+                              <span className="text-sm text-gray-200">
+                                Edited by: {item.editedBy}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td className="p-3 border-b text-right">
+                            {item.createdAt}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="flex justify-center my-4 space-x-2">
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1 rounded-lg bg-[#14203C] text-white disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+
+                    {Array.from({ length: totalPages }, (_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentPage(i + 1)}
+                        className={`px-3 py-1 rounded-lg ${
+                          currentPage === i + 1
+                            ? "bg-[#14203C] text-white"
+                            : "bg-[#7686ad] text-[#14203C]"
+                        }`}
+                      >
+                        {i + 1}
+                      </button>
+                    ))}
+
+                    <button
+                      onClick={() =>
+                        setCurrentPage((p) => Math.min(p + 1, totalPages))
+                      }
+                      disabled={currentPage === totalPages}
+                      className="px-3 py-1 rounded-lg bg-[#14203C] text-white disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
