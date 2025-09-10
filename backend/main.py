@@ -35,7 +35,7 @@ def check_cuda_availability():
             # Old GPUs (like GTX 1050 Ti) don’t support float16
             if "1050" in gpu_name or "1060" in gpu_name or "1070" in gpu_name or "1080" in gpu_name:
                 logger.info("Detected Pascal GPU → using float32 instead of float16")
-                return "cuda", "float32"
+                return "cuda", "int8_float32"
 
             # Modern GPUs → try float16
             return "cuda", "float16"
@@ -53,7 +53,7 @@ def initialize_model():
         device, compute_type = check_cuda_availability()
         
         logger.info(f"Initializing Whisper model with device: {device}, compute_type: {compute_type}")
-        model = WhisperModel("medium", device=device, compute_type=compute_type)
+        model = WhisperModel("large-v3", device=device, compute_type=compute_type)
         
         logger.info("Whisper model loaded successfully")
         return model, device, compute_type

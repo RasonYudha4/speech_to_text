@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
+import WaveSurfer from "wavesurfer.js";
 import axios from "axios";
 
 function App() {
-  const [count, setCount] = useState(0);
   const [srtData, setSrtData] = useState([]);
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
@@ -17,7 +17,6 @@ function App() {
     text: "",
   });
 
-  // Audio upload states
   const [audioFile, setAudioFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -27,15 +26,15 @@ function App() {
 
   const videoRef = useRef(null);
   const audioInputRef = useRef(null);
+  const waveformRef = useRef(null);
+  const wavesurferRef = useRef(null);
 
-  // Convert timestamp to seconds
   const timeToSeconds = (timeStr) => {
     const [time, ms] = timeStr.split(/[,\.]/);
     const [hours, minutes, seconds] = time.split(":").map(Number);
     return hours * 3600 + minutes * 60 + seconds + parseInt(ms) / 1000;
   };
 
-  // Generate SRT file content
   const generateSRTContent = () => {
     return srtData
       .map((subtitle, index) => {
@@ -44,7 +43,6 @@ function App() {
       .join("\n");
   };
 
-  // Download SRT file
   const downloadSRT = (filename = "subtitles.srt") => {
     if (srtData.length === 0) {
       alert("No subtitle data to download. Please upload an SRT file first.");
@@ -66,11 +64,81 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Handle audio file upload
+  // Initialize WaveSurfer when video is loaded
+  useEffect(() => {
+    if (videoUrl && waveformRef.current) {
+      // Cleanup existing wavesurfer instance
+      if (wavesurferRef.current) {
+        wavesurferRef.current.destroy();
+      }
+
+      // Create new WaveSurfer instance
+      wavesurferRef.current = WaveSurfer.create({
+        container: waveformRef.current,
+        waveColor: '#14203C',
+        progressColor: '#4c6397',
+        cursorColor: '#ffffff',
+        barWidth: 2,
+        barRadius: 1,
+        responsive: true,
+        height: 80,
+        backend: 'MediaElement',
+        dragToSeek: true,
+        minPxPerSec: 100,
+        mediaControls: false,
+      });
+
+      // Load the same video file for waveform
+      wavesurferRef.current.load(videoUrl);
+
+      // Sync waveform with video playback
+      wavesurferRef.current.on('ready', () => {
+        console.log('Waveform is ready');
+      });
+
+      // Handle waveform click to seek video
+      wavesurferRef.current.on('seek', (progress) => {
+        if (videoRef.current) {
+          const duration = videoRef.current.duration;
+          const seekTime = progress * duration;
+          videoRef.current.currentTime = seekTime;
+          setCurrentTime(seekTime);
+        }
+      });
+
+      return () => {
+        if (wavesurferRef.current) {
+          wavesurferRef.current.destroy();
+        }
+      };
+    }
+  }, [videoUrl]);
+
+  // Sync waveform with video time updates
+  useEffect(() => {
+    if (wavesurferRef.current && videoRef.current) {
+      const duration = videoRef.current.duration;
+      if (duration > 0) {
+        const progress = currentTime / duration;
+        wavesurferRef.current.seekTo(progress);
+      }
+    }
+  }, [currentTime]);
+
+  // Sync waveform play/pause with video
+  useEffect(() => {
+    if (wavesurferRef.current) {
+      if (isPlaying) {
+        wavesurferRef.current.play();
+      } else {
+        wavesurferRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
+
   const handleAudioUpload = async (file) => {
     if (!file) return;
 
-    // Validate file type
     const allowedTypes = [
       "audio/wav",
       "audio/mp3",
@@ -136,13 +204,13 @@ function App() {
         }
       );
 
-      setUploadProgress(85); 
+      setUploadProgress(85);
 
       const srtBlob = new Blob([response.data], {
         type: "text/plain;charset=utf-8",
       });
 
-      setUploadProgress(95); 
+      setUploadProgress(95);
 
       const url = URL.createObjectURL(srtBlob);
 
@@ -443,6 +511,9 @@ function App() {
       if (videoUrl) {
         URL.revokeObjectURL(videoUrl);
       }
+      if (wavesurferRef.current) {
+        wavesurferRef.current.destroy();
+      }
     };
   }, [videoUrl]);
 
@@ -458,8 +529,8 @@ function App() {
             it as you wish
           </div>
 
-          <div className="grid grid-cols-3 ">
-            <div className="col-span-2 p-3">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-2">
               {videoUrl ? (
                 <div className="bg-black rounded-xl overflow-hidden relative h-96">
                   <video
@@ -543,11 +614,51 @@ function App() {
                   </label>
                 </div>
               )}
+
+              <div className="bg-gradient-to-r from-amber-400 to-amber-500 h-24 rounded-xl mt-4 flex items-center relative overflow-hidden">
+                {videoUrl ? (
+                  <>
+                    <div className="absolute inset-0 bg-black bg-opacity-20"></div>
+                    <div className="relative z-10 w-full">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-black font-semibold text-sm">
+                          Audio Waveform
+                        </h3>
+                      </div>
+                      <div 
+                        ref={waveformRef} 
+                        className="w-full bg-black bg-opacity-30 rounded"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full flex items-center justify-center">
+                    <div className="text-center">
+                      <svg
+                        className="w-8 h-8 mx-auto mb-2 text-black opacity-60"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                        />
+                      </svg>
+                      <p className="text-black opacity-80 text-sm font-medium">
+                        Audio waveform will appear here once video is loaded
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="p-3">
+            <div className="">
               <div
-                className={`h-96 border-2 border-dashed rounded-lg overflow-hidden flex flex-col shadow-sm transition-all duration-300 ${
+                className={`h-[500px] border-2 border-dashed rounded-lg overflow-hidden flex flex-col shadow-sm transition-all duration-300 ${
                   isDragging
                     ? "border-blue-400 bg-blue-50"
                     : srtData.length > 0
@@ -666,7 +777,7 @@ function App() {
               )}
             </div>
 
-            <div className="col-span-3 p-3">
+            <div className="col-span-2">
               <h2 className="text-lg text-white font-bold mb-4">Text Detail</h2>
               {selectedSubtitleIndex >= 0 ? (
                 <div className="grid grid-cols-2 gap-4">
@@ -729,7 +840,7 @@ function App() {
               )}
 
               {selectedSubtitleIndex >= 0 && (
-                <div className="mt-4 flex justify-center gap-3">
+                <div className="mt-4 flex justify-center gap-3 p-3">
                   <button
                     onClick={handleSaveChanges}
                     className="px-6 py-2 bg-[#14203C] hover:bg-[#0d245c] hover:cursor-pointer text-white font-semibold rounded transition-colors"
@@ -747,9 +858,6 @@ function App() {
                   </button>
                 </div>
               )}
-            </div>
-
-            <div className="col-span-3 p-3 flex justify-center">
               <button
                 onClick={() => downloadSRT()}
                 disabled={srtData.length === 0}
@@ -763,6 +871,14 @@ function App() {
                   ? "No SRT to Download"
                   : "Download Updated SRT"}
               </button>
+            </div>
+            <div className="">
+              <h3 className=" text-lg text-white font-bold mb-4">
+                Editted Transcription Log
+              </h3>
+              <div className=" bg-green-400 rounded-xl h-full">
+
+              </div>
             </div>
           </div>
           <div className="border-t border-[#b5b3b3] my-20"></div>
