@@ -1,12 +1,30 @@
 import { useState, useRef, useEffect } from "react";
+import axios from "axios";
+
 
 function App() {
-  const [srtData, setSrtData] = useState([]);
+  // =============================================================================
+  // MEDIA FILES STATE
+  // =============================================================================
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [audioFile, setAudioFile] = useState(null);
+
+  // =============================================================================
+  // SUBTITLE DATA STATE
+  // =============================================================================
+  const [srtData, setSrtData] = useState([]);
+  const [generatedTranscription, setGeneratedTranscription] = useState("");
+
+  // =============================================================================
+  // VIDEO PLAYBACK STATE
+  // =============================================================================
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // =============================================================================
+  // SUBTITLE INTERACTION STATE
+  // =============================================================================
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState(-1);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(-1);
   const [editForm, setEditForm] = useState({
@@ -15,7 +33,18 @@ function App() {
     text: "",
   });
 
-  // Dragging for region waveform area
+  // =============================================================================
+  // WAVEFORM VISUALIZATION STATE
+  // =============================================================================
+  const [waveformData, setWaveformData] = useState([]);
+  const [waveformLoaded, setWaveformLoaded] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomCenter, setZoomCenter] = useState(0.5);
+
+  // =============================================================================
+  // DRAG & DROP STATE
+  // =============================================================================
+  const [isDragging, setIsDragging] = useState(false);
   const [dragInfo, setDragInfo] = useState({
     subtitleIndex: -1,
     edge: null,
@@ -27,22 +56,30 @@ function App() {
     edge: null,
   });
 
-  const [audioFile, setAudioFile] = useState(null);
+  // =============================================================================
+  // UPLOAD STATE
+  // =============================================================================
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState(false);
-  const [generatedTranscription, setGeneratedTranscription] = useState("");
 
-  const [waveformData, setWaveformData] = useState([]);
-  const [waveformLoaded, setWaveformLoaded] = useState(false);
+  // =============================================================================
+  // PAGINATION STATE
+  // =============================================================================
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 5;
 
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomCenter, setZoomCenter] = useState(0.5);
-
+  // =============================================================================
+  // REFS
+  // =============================================================================
   const videoRef = useRef(null);
   const audioInputRef = useRef(null);
   const canvasRef = useRef(null);
+
+  // ============================================================================
+  // 🎵 WAVEFORM VISUALIZATION & RENDERING
+  // ============================================================================
 
   const generateMockWaveform = (duration) => {
     const samples = Math.floor(duration * 10);
@@ -61,11 +98,11 @@ function App() {
     const ctx = canvas.getContext("2d");
     const { width, height } = canvas;
 
-    // Clear canvas
+    // Clear canvas with background
     ctx.fillStyle = "#14203C";
     ctx.fillRect(0, 0, width, height);
 
-    // Calculate visible range based on zoom
+    // Calculate visible range
     const totalSamples = waveformData.length;
     const visibleSamples = Math.floor(totalSamples / zoomLevel);
     const startSample = Math.floor(
@@ -87,104 +124,130 @@ function App() {
         (currentTime / (videoRef.current?.duration || 1)) * waveformData.length
       );
 
-      if (actualIndex <= currentSample) {
-        ctx.fillStyle = "#4c6397";
-      } else {
-        ctx.fillStyle = "#2a3a5c";
-      }
-
+      ctx.fillStyle = actualIndex <= currentSample ? "#4c6397" : "#2a3a5c";
       ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barHeight);
     });
 
     // Draw subtitle regions
-    if (srtData.length > 0 && videoRef.current?.duration) {
-      const videoDuration = videoRef.current.duration;
-      const visibleStartTime = (startSample / totalSamples) * videoDuration;
-      const visibleEndTime = (endSample / totalSamples) * videoDuration;
-      const visibleDuration = visibleEndTime - visibleStartTime;
+    drawSubtitleRegions(
+      ctx,
+      width,
+      height,
+      startSample,
+      endSample,
+      totalSamples
+    );
 
-      srtData.forEach((subtitle, index) => {
-        const startTime = timeToSeconds(subtitle.start);
-        const endTime = timeToSeconds(subtitle.end);
+    // Draw playhead cursor
+    drawPlayheadCursor(
+      ctx,
+      width,
+      height,
+      startSample,
+      endSample,
+      totalSamples
+    );
+  };
 
-        // Only draw if subtitle overlaps with visible area
-        if (endTime >= visibleStartTime && startTime <= visibleEndTime) {
-          const startX = Math.max(
-            0,
-            ((startTime - visibleStartTime) / visibleDuration) * width
-          );
-          const endX = Math.min(
-            width,
-            ((endTime - visibleStartTime) / visibleDuration) * width
-          );
+  const drawSubtitleRegions = (
+    ctx,
+    width,
+    height,
+    startSample,
+    endSample,
+    totalSamples
+  ) => {
+    if (srtData.length === 0 || !videoRef.current?.duration) return;
 
-          const colors = [
-            "rgba(255, 99, 132, 0.3)",
-            "rgba(54, 162, 235, 0.3)",
-            "rgba(255, 205, 86, 0.3)",
-            "rgba(75, 192, 192, 0.3)",
-            "rgba(153, 102, 255, 0.3)",
-          ];
+    const videoDuration = videoRef.current.duration;
+    const visibleStartTime = (startSample / totalSamples) * videoDuration;
+    const visibleEndTime = (endSample / totalSamples) * videoDuration;
+    const visibleDuration = visibleEndTime - visibleStartTime;
 
-          ctx.fillStyle = colors[index % colors.length];
-          if (selectedSubtitleIndex === index) {
-            ctx.fillStyle = "rgba(255, 215, 0, 0.4)";
-          } else if (activeSubtitleIndex === index) {
-            ctx.fillStyle = "rgba(0, 255, 0, 0.4)";
-          }
+    srtData.forEach((subtitle, index) => {
+      const startTime = timeToSeconds(subtitle.start);
+      const endTime = timeToSeconds(subtitle.end);
 
-          ctx.fillRect(startX, 0, endX - startX, height);
+      if (endTime >= visibleStartTime && startTime <= visibleEndTime) {
+        const startX = Math.max(
+          0,
+          ((startTime - visibleStartTime) / visibleDuration) * width
+        );
+        const endX = Math.min(
+          width,
+          ((endTime - visibleStartTime) / visibleDuration) * width
+        );
 
-          // Draw resize handles for selected subtitle or hovered region
-          if (
-            selectedSubtitleIndex === index ||
-            hoveredRegion.subtitleIndex === index
-          ) {
-            ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.fillRect(startX - 2, 0, 4, height); // Start handle
-            ctx.fillRect(endX - 2, 0, 4, height); // End handle
-
-            // Highlight the edge being hovered or dragged
-            if (
-              (hoveredRegion.subtitleIndex === index &&
-                hoveredRegion.edge === "start") ||
-              (dragInfo.subtitleIndex === index && dragInfo.edge === "start")
-            ) {
-              ctx.fillStyle = "rgba(255, 0, 0, 0.8)";
-              ctx.fillRect(startX - 3, 0, 6, height);
-            }
-            if (
-              (hoveredRegion.subtitleIndex === index &&
-                hoveredRegion.edge === "end") ||
-              (dragInfo.subtitleIndex === index && dragInfo.edge === "end")
-            ) {
-              ctx.fillStyle = "rgba(255, 0, 0, 0.8)";
-              ctx.fillRect(endX - 3, 0, 6, height);
-            }
-          }
+        // Region background
+        if (selectedSubtitleIndex === index) {
+          ctx.fillStyle = "rgba(255, 215, 0, 0.4)";
+        } else if (activeSubtitleIndex === index) {
+          ctx.fillStyle = "rgba(0, 255, 0, 0.4)";
+        } else {
+          ctx.fillStyle = "rgba(54, 162, 235, 0.3)";
         }
-      });
-    }
+        ctx.fillRect(startX, 0, endX - startX, height);
 
-    // Draw playback cursor
-    if (videoRef.current?.duration) {
-      const videoDuration = videoRef.current.duration;
-      const visibleStartTime = (startSample / totalSamples) * videoDuration;
-      const visibleEndTime = (endSample / totalSamples) * videoDuration;
-
-      // Only draw cursor if current time is in visible range
-      if (currentTime >= visibleStartTime && currentTime <= visibleEndTime) {
-        const visibleDuration = visibleEndTime - visibleStartTime;
-        const cursorX =
-          ((currentTime - visibleStartTime) / visibleDuration) * width;
-
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cursorX, 0);
-        ctx.lineTo(cursorX, height);
-        ctx.stroke();
+        // Edge handles
+        drawSubtitleEdges(ctx, startX, endX, height, index);
       }
+    });
+  };
+
+  const drawSubtitleEdges = (ctx, startX, endX, height, index) => {
+    if (
+      selectedSubtitleIndex === index ||
+      hoveredRegion.subtitleIndex === index
+    ) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+      ctx.fillRect(startX - 2, 0, 4, height);
+      ctx.fillRect(endX - 2, 0, 4, height);
+
+      // Highlight dragged edges
+      if (
+        (hoveredRegion.subtitleIndex === index &&
+          hoveredRegion.edge === "start") ||
+        (dragInfo.subtitleIndex === index && dragInfo.edge === "start")
+      ) {
+        ctx.fillStyle = "rgba(255, 0, 0, 0.8)";
+        ctx.fillRect(startX - 3, 0, 6, height);
+      }
+      if (
+        (hoveredRegion.subtitleIndex === index &&
+          hoveredRegion.edge === "end") ||
+        (dragInfo.subtitleIndex === index && dragInfo.edge === "end")
+      ) {
+        ctx.fillStyle = "rgba(255, 0, 0, 0.8)";
+        ctx.fillRect(endX - 3, 0, 6, height);
+      }
+    }
+  };
+
+  const drawPlayheadCursor = (
+    ctx,
+    width,
+    height,
+    startSample,
+    endSample,
+    totalSamples
+  ) => {
+    if (!videoRef.current?.duration) return;
+
+    const videoDuration = videoRef.current.duration;
+    const visibleStartTime = (startSample / totalSamples) * videoDuration;
+    const visibleEndTime = (endSample / totalSamples) * videoDuration;
+
+    if (currentTime >= visibleStartTime && currentTime <= visibleEndTime) {
+      const visibleDuration = visibleEndTime - visibleStartTime;
+      const cursorX =
+        ((currentTime - visibleStartTime) / visibleDuration) * width;
+
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cursorX, 0);
+      ctx.lineTo(cursorX, height);
+      ctx.stroke();
     }
   };
 
@@ -194,7 +257,10 @@ function App() {
     return "pointer";
   };
 
-  // Update mouse move handler
+  // ============================================================================
+  // 🖱️ MOUSE & CANVAS INTERACTION
+  // ============================================================================
+
   const handleCanvasMouseMove = (e) => {
     if (!videoRef.current?.duration) return;
 
@@ -203,79 +269,77 @@ function App() {
     const mouseX = e.clientX - rect.left;
 
     if (isDragging && dragInfo.subtitleIndex !== -1) {
-      // Handle dragging
-      const totalSamples = waveformData.length;
-      const visibleSamples = Math.floor(totalSamples / zoomLevel);
-      const startSample = Math.floor(
-        (totalSamples - visibleSamples) * zoomCenter
-      );
-      const endSample = Math.min(startSample + visibleSamples, totalSamples);
-
-      const videoDuration = videoRef.current.duration;
-      const visibleStartTime = (startSample / totalSamples) * videoDuration;
-      const visibleEndTime = (endSample / totalSamples) * videoDuration;
-      const visibleDuration = visibleEndTime - visibleStartTime;
-
-      const currentMouseTime =
-        visibleStartTime + (mouseX / rect.width) * visibleDuration;
-      const constraints = getTimeConstraints(dragInfo.subtitleIndex);
-
-      const updatedSrtData = [...srtData];
-      const subtitle = updatedSrtData[dragInfo.subtitleIndex];
-
-      if (dragInfo.edge === "start") {
-        const currentEndTime = timeToSeconds(subtitle.end);
-        const newStartTime = Math.max(
-          constraints.minTime,
-          Math.min(currentMouseTime, currentEndTime - 0.1)
-        );
-        subtitle.start = secondsToSRTTime(newStartTime);
-      } else if (dragInfo.edge === "end") {
-        const currentStartTime = timeToSeconds(subtitle.start);
-        const newEndTime = Math.min(
-          constraints.maxTime,
-          Math.max(currentMouseTime, currentStartTime + 0.1)
-        );
-        subtitle.end = secondsToSRTTime(newEndTime);
-      }
-
-      setSrtData(updatedSrtData);
-
-      // Update edit form if this subtitle is selected
-      if (selectedSubtitleIndex === dragInfo.subtitleIndex) {
-        setEditForm({
-          start: subtitle.start,
-          end: subtitle.end,
-          text: subtitle.text,
-        });
-      }
+      handleSubtitleDrag(mouseX, rect.width);
     } else {
-      // Handle hover detection
       const hoverInfo = getRegionEdgeHover(mouseX, rect.width);
       setHoveredRegion(hoverInfo);
     }
   };
 
-  // Mouse down handler for starting drag
+  const handleSubtitleDrag = (mouseX, canvasWidth) => {
+    const currentMouseTime = calculateMouseTime(mouseX, canvasWidth);
+    const constraints = getTimeConstraints(dragInfo.subtitleIndex);
+    const updatedSrtData = [...srtData];
+    const subtitle = updatedSrtData[dragInfo.subtitleIndex];
+
+    if (dragInfo.edge === "start") {
+      const currentEndTime = timeToSeconds(subtitle.end);
+      const newStartTime = Math.max(
+        constraints.minTime,
+        Math.min(currentMouseTime, currentEndTime - 0.1)
+      );
+      subtitle.start = secondsToSRTTime(newStartTime);
+    } else if (dragInfo.edge === "end") {
+      const currentStartTime = timeToSeconds(subtitle.start);
+      const newEndTime = Math.min(
+        constraints.maxTime,
+        Math.max(currentMouseTime, currentStartTime + 0.1)
+      );
+      subtitle.end = secondsToSRTTime(newEndTime);
+    }
+
+    setSrtData(updatedSrtData);
+
+    if (selectedSubtitleIndex === dragInfo.subtitleIndex) {
+      setEditForm({
+        start: subtitle.start,
+        end: subtitle.end,
+        text: subtitle.text,
+      });
+    }
+  };
+
+  const calculateMouseTime = (mouseX, canvasWidth) => {
+    const totalSamples = waveformData.length;
+    const visibleSamples = Math.floor(totalSamples / zoomLevel);
+    const startSample = Math.floor(
+      (totalSamples - visibleSamples) * zoomCenter
+    );
+    const endSample = Math.min(startSample + visibleSamples, totalSamples);
+
+    const videoDuration = videoRef.current.duration;
+    const visibleStartTime = (startSample / totalSamples) * videoDuration;
+    const visibleEndTime = (endSample / totalSamples) * videoDuration;
+    const visibleDuration = visibleEndTime - visibleStartTime;
+
+    return visibleStartTime + (mouseX / canvasWidth) * visibleDuration;
+  };
+
   const handleCanvasMouseDown = (e) => {
     if (!videoRef.current?.duration) return;
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
-
     const hoverInfo = getRegionEdgeHover(mouseX, rect.width);
 
     if (hoverInfo.subtitleIndex !== -1) {
-      // Start dragging a region edge
       setIsDragging(true);
       setDragInfo({
         subtitleIndex: hoverInfo.subtitleIndex,
         edge: hoverInfo.edge,
         initialMouseX: mouseX,
       });
-
-      // Select this subtitle for editing
       selectSubtitleForEdit(
         srtData[hoverInfo.subtitleIndex],
         hoverInfo.subtitleIndex
@@ -283,8 +347,7 @@ function App() {
     }
   };
 
-  // Mouse up handler for ending drag
-  const handleCanvasMouseUp = (e) => {
+  const handleCanvasMouseUp = () => {
     setIsDragging(false);
     setDragInfo({
       subtitleIndex: -1,
@@ -295,20 +358,26 @@ function App() {
   };
 
   const handleCanvasClick = (e) => {
-    if (isDragging) return; // Don't handle click if we were dragging
-
-    if (!videoRef.current?.duration) return;
+    if (isDragging || !videoRef.current?.duration) return;
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const clickRatio = x / rect.width;
 
-    // Check if clicking on a region edge
+    // Don't seek if clicking on an edge
     const hoverInfo = getRegionEdgeHover(x, rect.width);
-    if (hoverInfo.subtitleIndex !== -1) return; // Don't seek if clicking on an edge
+    if (hoverInfo.subtitleIndex !== -1) return;
 
-    // Calculate actual time based on zoom
+    const seekTime = calculateSeekTime(x, rect.width);
+    videoRef.current.currentTime = seekTime;
+    setCurrentTime(seekTime);
+
+    // Check for subtitle selection
+    checkSubtitleSelection(seekTime);
+  };
+
+  const calculateSeekTime = (clickX, canvasWidth) => {
+    const clickRatio = clickX / canvasWidth;
     const totalSamples = waveformData.length;
     const visibleSamples = Math.floor(totalSamples / zoomLevel);
     const startSample = Math.floor(
@@ -322,12 +391,10 @@ function App() {
       (endSample / totalSamples) * videoRef.current.duration;
     const visibleDuration = visibleEndTime - visibleStartTime;
 
-    const seekTime = visibleStartTime + clickRatio * visibleDuration;
+    return visibleStartTime + clickRatio * visibleDuration;
+  };
 
-    videoRef.current.currentTime = seekTime;
-    setCurrentTime(seekTime);
-
-    // Check for subtitle selection
+  const checkSubtitleSelection = (seekTime) => {
     srtData.forEach((subtitle, index) => {
       const startTime = timeToSeconds(subtitle.start);
       const endTime = timeToSeconds(subtitle.end);
@@ -338,41 +405,102 @@ function App() {
     });
   };
 
+  // File drag and drop handlers
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  // ============================================================================
+  // 🔍 ZOOM & NAVIGATION CONTROLS
+  // ============================================================================
+
   const handleWaveformWheel = (e) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
+    if (!e.ctrlKey) return;
 
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseRatio = mouseX / rect.width;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseRatio = mouseX / rect.width;
 
-      const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoomLevel = Math.max(1, Math.min(1000, zoomLevel * zoomDelta));
+    const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoomLevel = Math.max(1, Math.min(10000, zoomLevel * zoomDelta));
 
-      if (newZoomLevel !== zoomLevel) {
-        const totalSamples = waveformData.length;
-        const visibleSamples = Math.floor(totalSamples / zoomLevel);
-        const startSample = Math.floor(
-          (totalSamples - visibleSamples) * zoomCenter
-        );
-        const currentMouseSample = startSample + mouseRatio * visibleSamples;
-
-        const newVisibleSamples = Math.floor(totalSamples / newZoomLevel);
-        const newCenter = Math.max(
-          0,
-          Math.min(
-            1,
-            (currentMouseSample - mouseRatio * newVisibleSamples) /
-              (totalSamples - newVisibleSamples)
-          )
-        );
-
-        setZoomLevel(newZoomLevel);
-        setZoomCenter(newCenter);
-      }
+    if (newZoomLevel !== zoomLevel) {
+      const newZoomCenter = calculateZoomCenter(mouseRatio, newZoomLevel);
+      setZoomLevel(newZoomLevel);
+      setZoomCenter(newZoomCenter);
     }
   };
+
+  const calculateZoomCenter = (mouseRatio, newZoomLevel) => {
+    const totalSamples = waveformData.length;
+    const visibleSamples = Math.floor(totalSamples / zoomLevel);
+    const startSample = Math.floor(
+      (totalSamples - visibleSamples) * zoomCenter
+    );
+    const currentMouseSample = startSample + mouseRatio * visibleSamples;
+
+    const newVisibleSamples = Math.floor(totalSamples / newZoomLevel);
+    return Math.max(
+      0,
+      Math.min(
+        1,
+        (currentMouseSample - mouseRatio * newVisibleSamples) /
+          (totalSamples - newVisibleSamples)
+      )
+    );
+  };
+
+  const handleSliderChange = (e) => {
+    const value = parseFloat(e.target.value);
+    setZoomCenter(value);
+  };
+
+  const getScrollbarProps = () => {
+    const visibleRatio = 1 / zoomLevel;
+    const thumbWidth = Math.max(visibleRatio * 100, 5);
+    const isScrollable = zoomLevel > 1;
+
+    return { isScrollable, thumbWidth, visibleRatio };
+  };
+
+  const renderScrollControls = () => {
+    const { isScrollable, thumbWidth } = getScrollbarProps();
+    if (!isScrollable) return null;
+
+    return (
+      <div className="mt-2 w-full space-y-2">
+        <div className="flex items-center space-x-2">
+          <span className="text-xs text-black opacity-60">Start</span>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={zoomCenter}
+            onChange={handleSliderChange}
+            className="flex-1 h-2 bg-black bg-opacity-30 rounded-lg appearance-none cursor-pointer
+                   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 
+                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-300 [&::-webkit-slider-thumb]:cursor-pointer
+                   [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white
+                   [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full 
+                   [&::-moz-range-thumb]:bg-amber-300 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:border-none"
+          />
+          <span className="text-xs text-black opacity-60">End</span>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================================
+  // ⏱️ TIME & SUBTITLE UTILITIES
+  // ============================================================================
 
   const timeToSeconds = (timeStr) => {
     const [time, ms] = timeStr.split(/[,\.]/);
@@ -393,7 +521,14 @@ function App() {
       .padStart(3, "0")}`;
   };
 
-  // Helper function to find the constraints for a subtitle region
+  const formatTimeForDisplay = (timeStr) => {
+    if (!timeStr) return "";
+    const seconds = timeToSeconds(timeStr);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+  };
+
   const getTimeConstraints = (subtitleIndex) => {
     let minTime = 0;
     let maxTime = videoRef.current?.duration || 0;
@@ -417,10 +552,10 @@ function App() {
     return { minTime, maxTime };
   };
 
-  // Check if mouse is near a region edge
   const getRegionEdgeHover = (mouseX, canvasWidth) => {
-    if (!videoRef.current?.duration || srtData.length === 0)
+    if (!videoRef.current?.duration || srtData.length === 0) {
       return { subtitleIndex: -1, edge: null };
+    }
 
     const totalSamples = waveformData.length;
     const visibleSamples = Math.floor(totalSamples / zoomLevel);
@@ -459,9 +594,122 @@ function App() {
     return { subtitleIndex: -1, edge: null };
   };
 
+  // ============================================================================
+  // 📝 SUBTITLE DATA MANAGEMENT
+  // ============================================================================
+
+  const selectSubtitleForEdit = (subtitle, index) => {
+    setSelectedSubtitleIndex(index);
+    setEditForm({
+      start: subtitle.start,
+      end: subtitle.end,
+      text: subtitle.text,
+    });
+    jumpToSubtitle(subtitle);
+  };
+
+  const jumpToSubtitle = (subtitle) => {
+    if (videoRef.current) {
+      const startTime = timeToSeconds(subtitle.start);
+      videoRef.current.currentTime = startTime;
+      setCurrentTime(startTime);
+    }
+  };
+
+  const handleFormChange = (field, value) => {
+    setEditForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleSaveChanges = () => {
+    if (selectedSubtitleIndex === -1) {
+      alert("Please select a subtitle to edit");
+      return;
+    }
+
+    if (!validateSubtitleForm()) return;
+
+    const updatedSrtData = [...srtData];
+    updatedSrtData[selectedSubtitleIndex] = {
+      ...updatedSrtData[selectedSubtitleIndex],
+      start: editForm.start,
+      end: editForm.end,
+      text: editForm.text.trim(),
+    };
+
+    setSrtData(updatedSrtData);
+    alert("Subtitle updated successfully!");
+  };
+
+  const validateSubtitleForm = () => {
+    if (!editForm.start || !editForm.end || !editForm.text.trim()) {
+      alert("Please fill in all fields");
+      return false;
+    }
+
+    const timeRegex = /^\d{2}:\d{2}:\d{2}[,\.]\d{3}$/;
+    if (!timeRegex.test(editForm.start) || !timeRegex.test(editForm.end)) {
+      alert("Please use correct timestamp format: HH:MM:SS,mmm");
+      return false;
+    }
+
+    return true;
+  };
+
+  // ============================================================================
+  // 📁 FILE PROCESSING & I/O
+  // ============================================================================
+
+  const parseSRT = (content) => {
+    const normalizedContent = content
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .trim();
+
+    const blocks = normalizedContent.split(/\n\s*\n/);
+    const parsed = [];
+
+    blocks.forEach((block, blockIndex) => {
+      if (!block.trim()) return;
+
+      const lines = block.trim().split("\n");
+      if (lines.length >= 3) {
+        const subtitle = parseSubtitleBlock(lines, blockIndex);
+        if (subtitle) parsed.push(subtitle);
+      }
+    });
+
+    return parsed;
+  };
+
+  const parseSubtitleBlock = (lines, blockIndex) => {
+    const sequenceLine = lines[0].trim();
+    const id = parseInt(sequenceLine) || blockIndex + 1;
+    const timeLine = lines[1].trim();
+    const textLines = lines.slice(2);
+    const text = textLines.join(" ").trim();
+
+    const timeRegex =
+      /(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})/;
+    const timeMatch = timeLine.match(timeRegex);
+
+    if (timeMatch && text) {
+      return {
+        id: id,
+        start: timeMatch[1].replace(".", ","),
+        end: timeMatch[2].replace(".", ","),
+        text: text,
+      };
+    }
+
+    return null;
+  };
+
   const generateSRTContent = () => {
     return srtData
-      .map((subtitle, index) => {
+      .map((subtitle) => {
         return `${subtitle.id}\n${subtitle.start} --> ${subtitle.end}\n${subtitle.text}\n`;
       })
       .join("\n");
@@ -487,6 +735,247 @@ function App() {
 
     URL.revokeObjectURL(url);
   };
+
+  const handleSRTFileInput = (e) => {
+    const file = e.target.files[0];
+    if (file && file.name.toLowerCase().endsWith(".srt")) {
+      processSRTFile(file);
+    }
+  };
+
+  const handleSRTDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const srtFile = files.find((file) =>
+      file.name.toLowerCase().endsWith(".srt")
+    );
+
+    if (srtFile) {
+      processSRTFile(srtFile);
+    } else {
+      alert("Please upload a valid .srt file");
+    }
+  };
+
+  const processSRTFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target.result;
+      const parsed = parseSRT(content);
+      setSrtData(parsed);
+    };
+    reader.readAsText(file);
+  };
+
+  // ============================================================================
+  // 🎬 VIDEO MANAGEMENT
+  // ============================================================================
+
+  const handleVideoUpload = (file) => {
+    if (file && file.type.startsWith("video/")) {
+      if (videoUrl) {
+        URL.revokeObjectURL(videoUrl);
+      }
+
+      setVideoFile(file);
+      const url = URL.createObjectURL(file);
+      setVideoUrl(url);
+    } else {
+      alert("Please select a valid video file");
+    }
+  };
+
+  const handleVideoDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const videoFile = files.find((file) => file.type.startsWith("video/"));
+
+    if (videoFile) {
+      handleVideoUpload(videoFile);
+    }
+  };
+
+  const handleVideoFileInput = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      handleVideoUpload(file);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
+
+  const handlePlay = () => setIsPlaying(true);
+  const handlePause = () => setIsPlaying(false);
+
+  // ============================================================================
+  // 🎤 AUDIO PROCESSING & TRANSCRIPTION
+  // ============================================================================
+
+  const handleAudioUpload = async (file) => {
+    if (!file) return;
+
+    const validationResult = validateAudioFile(file);
+    if (!validationResult.isValid) {
+      setUploadError(validationResult.error);
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadError("");
+    setUploadSuccess(false);
+    setUploadProgress(0);
+
+    // simulateTranscription();
+
+    const formData = new FormData();
+    formData.append("audio", file);
+
+    try {
+      const response = await axios.post(
+        "http://localhost:5000/upload",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+          responseType: "blob",
+          timeout: 0,
+          onUploadProgress: (progressEvent) => {
+            const progress = Math.round(
+              (progressEvent.loaded * 70) / progressEvent.total
+            );
+            setUploadProgress(progress);
+          },
+        }
+      );
+
+      setUploadProgress(85);
+
+      const srtBlob = new Blob([response.data], {
+        type: "text/plain;charset=utf-8",
+      });
+
+      setUploadProgress(95);
+
+      const url = URL.createObjectURL(srtBlob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.name.replace(/\.[^/.]+$/, "") + "_transcription.srt";
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(url);
+
+      const srtText = await srtBlob.text();
+      const parsedSRT = parseSRT(srtText);
+      setSrtData(parsedSRT);
+
+      const transcriptionText = parsedSRT.map((s) => s.text).join(" ");
+      setGeneratedTranscription(transcriptionText);
+      setUploadProgress(100);
+      setIsUploading(false);
+      setUploadSuccess(true);
+      console.log('Response received:', response);
+    } catch (error) {
+      setIsUploading(false);
+      if (error.code === "ECONNABORTED") {
+        setUploadError("Transcription timed out. Please try again.");
+      } else {
+        setUploadError(
+          error.response?.data?.message ||
+            "An error occurred during transcription. Please try again."
+        );
+      }
+    }
+  };
+
+  const validateAudioFile = (file) => {
+    const allowedTypes = [
+      "audio/wav",
+      "audio/mp3",
+      "audio/mpeg",
+      "audio/m4a",
+      "audio/flac",
+      "audio/ogg",
+      "audio/webm",
+      "audio/aac",
+    ];
+    const allowedExtensions = [
+      "wav",
+      "mp3",
+      "mp4",
+      "m4a",
+      "flac",
+      "ogg",
+      "webm",
+      "aac",
+    ];
+    const fileExtension = file.name.split(".").pop().toLowerCase();
+
+    if (
+      !allowedTypes.includes(file.type) &&
+      !allowedExtensions.includes(fileExtension)
+    ) {
+      return {
+        isValid: false,
+        error:
+          "Please upload a valid audio file (WAV, MP3, M4A, FLAC, OGG, WEBM, AAC)",
+      };
+    }
+
+    if (file.size > 1000 * 1024 * 1024) {
+      return {
+        isValid: false,
+        error: "File size must be less than 1GB",
+      };
+    }
+
+    return { isValid: true };
+  };
+
+  const handleAudioFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setAudioFile(file);
+      handleAudioUpload(file);
+    }
+  };
+
+  const handleAudioDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const audioFile = files.find(
+      (file) =>
+        file.type.startsWith("audio/") ||
+        ["wav", "mp3", "mp4", "m4a", "flac", "ogg", "webm", "aac"].includes(
+          file.name.split(".").pop().toLowerCase()
+        )
+    );
+
+    if (audioFile) {
+      setAudioFile(audioFile);
+      handleAudioUpload(audioFile);
+    } else {
+      setUploadError("Please drop a valid audio file");
+    }
+  };
+
+  // ============================================================================
+  // 📊 DATA & STATE MANAGEMENT (useEffect hooks)
+  // ============================================================================
 
   useEffect(() => {
     if (videoRef.current && videoUrl) {
@@ -523,6 +1012,51 @@ function App() {
   ]);
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleWheelEvent = (e) => {
+      e.preventDefault(); // This will work now
+      e.stopPropagation();
+
+      // Your existing zoom logic here
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const relativeX = mouseX / rect.width;
+
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      const newZoomLevel = Math.max(1, zoomLevel * zoomFactor);
+
+      if (newZoomLevel !== zoomLevel) {
+        const newVisibleRatio = 1 / newZoomLevel;
+        const oldVisibleRatio = 1 / zoomLevel;
+
+        let newZoomCenter = zoomCenter;
+        if (newZoomLevel > 1) {
+          const zoomPoint = zoomCenter + (relativeX - 0.5) * oldVisibleRatio;
+          newZoomCenter = Math.max(
+            0,
+            Math.min(1 - newVisibleRatio, zoomPoint - newVisibleRatio * 0.5)
+          );
+        } else {
+          newZoomCenter = 0.5;
+        }
+
+        setZoomLevel(newZoomLevel);
+        setZoomCenter(newZoomCenter);
+      }
+    };
+
+    // Add event listener with passive: false
+    canvas.addEventListener("wheel", handleWheelEvent, { passive: false });
+
+    // Cleanup
+    return () => {
+      canvas.removeEventListener("wheel", handleWheelEvent);
+    };
+  }, [zoomLevel, zoomCenter]);
+
+  useEffect(() => {
     if (srtData.length === 0) return;
 
     const activeIndex = srtData.findIndex((subtitle) => {
@@ -533,317 +1067,6 @@ function App() {
 
     setActiveSubtitleIndex(activeIndex);
   }, [currentTime, srtData]);
-
-  const handleAudioUpload = async (file) => {
-    if (!file) return;
-
-    const allowedTypes = [
-      "audio/wav",
-      "audio/mp3",
-      "audio/mpeg",
-      "audio/m4a",
-      "audio/flac",
-      "audio/ogg",
-      "audio/webm",
-      "audio/aac",
-    ];
-    const allowedExtensions = [
-      "wav",
-      "mp3",
-      "mp4",
-      "m4a",
-      "flac",
-      "ogg",
-      "webm",
-      "aac",
-    ];
-
-    const fileExtension = file.name.split(".").pop().toLowerCase();
-
-    if (
-      !allowedTypes.includes(file.type) &&
-      !allowedExtensions.includes(fileExtension)
-    ) {
-      setUploadError(
-        "Please upload a valid audio file (WAV, MP3, M4A, FLAC, OGG, WEBM, AAC)"
-      );
-      return;
-    }
-
-    if (file.size > 1000 * 1024 * 1024) {
-      setUploadError("File size must be less than 1GB");
-      return;
-    }
-
-    setIsUploading(true);
-    setUploadError("");
-    setUploadSuccess(false);
-    setUploadProgress(0);
-
-    const simulateUpload = () => {
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += Math.random() * 10;
-        if (progress >= 100) {
-          progress = 100;
-          clearInterval(interval);
-
-          setTimeout(() => {
-            const mockSRT = [
-              {
-                id: 1,
-                start: "00:00:01,000",
-                end: "00:00:05,000",
-                text: "Welcome to the video transcriber demo.",
-              },
-              {
-                id: 2,
-                start: "00:00:06,000",
-                end: "00:00:10,000",
-                text: "This is a simulated transcription result.",
-              },
-              {
-                id: 3,
-                start: "00:00:11,000",
-                end: "00:00:15,000",
-                text: "Your actual transcription would appear here.",
-              },
-            ];
-
-            setSrtData(mockSRT);
-            setGeneratedTranscription(mockSRT.map((s) => s.text).join(" "));
-            setIsUploading(false);
-            setUploadSuccess(true);
-          }, 1000);
-        }
-        setUploadProgress(Math.min(progress, 100));
-      }, 200);
-    };
-
-    simulateUpload();
-  };
-
-  const handleAudioFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setAudioFile(file);
-      handleAudioUpload(file);
-    }
-  };
-
-  const handleAudioDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    const audioFile = files.find(
-      (file) =>
-        file.type.startsWith("audio/") ||
-        ["wav", "mp3", "mp4", "m4a", "flac", "ogg", "webm", "aac"].includes(
-          file.name.split(".").pop().toLowerCase()
-        )
-    );
-
-    if (audioFile) {
-      setAudioFile(audioFile);
-      handleAudioUpload(audioFile);
-    } else {
-      setUploadError("Please drop a valid audio file");
-    }
-  };
-
-  const parseSRT = (content) => {
-    const normalizedContent = content
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .trim();
-
-    const blocks = normalizedContent.split(/\n\s*\n/);
-    const parsed = [];
-
-    blocks.forEach((block, blockIndex) => {
-      if (!block.trim()) return;
-
-      const lines = block.trim().split("\n");
-
-      if (lines.length >= 3) {
-        const sequenceLine = lines[0].trim();
-        const id = parseInt(sequenceLine) || blockIndex + 1;
-
-        const timeLine = lines[1].trim();
-
-        const textLines = lines.slice(2);
-        const text = textLines.join(" ").trim();
-
-        const timeRegex =
-          /(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})/;
-        const timeMatch = timeLine.match(timeRegex);
-
-        if (timeMatch && text) {
-          const startTime = timeMatch[1].replace(".", ",");
-          const endTime = timeMatch[2].replace(".", ",");
-
-          parsed.push({
-            id: id,
-            start: startTime,
-            end: endTime,
-            text: text,
-          });
-        }
-      }
-    });
-
-    return parsed;
-  };
-
-  const handleVideoUpload = (file) => {
-    if (file && file.type.startsWith("video/")) {
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl);
-      }
-
-      setVideoFile(file);
-      const url = URL.createObjectURL(file);
-      setVideoUrl(url);
-    } else {
-      alert("Please select a valid video file");
-    }
-  };
-
-  const handleVideoDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    const videoFile = files.find((file) => file.type.startsWith("video/"));
-
-    if (videoFile) {
-      handleVideoUpload(videoFile);
-    }
-  };
-
-  const handleVideoFileInput = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      handleVideoUpload(file);
-    }
-  };
-
-  const handleSRTDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    const srtFile = files.find((file) =>
-      file.name.toLowerCase().endsWith(".srt")
-    );
-
-    if (srtFile) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target.result;
-        const parsed = parseSRT(content);
-        setSrtData(parsed);
-      };
-      reader.readAsText(srtFile);
-    } else {
-      alert("Please upload a valid .srt file");
-    }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleSRTFileInput = (e) => {
-    const file = e.target.files[0];
-    if (file && file.name.toLowerCase().endsWith(".srt")) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const content = event.target.result;
-        const parsed = parseSRT(content);
-        setSrtData(parsed);
-      };
-      reader.readAsText(file);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
-    }
-  };
-
-  const handlePlay = () => setIsPlaying(true);
-  const handlePause = () => setIsPlaying(false);
-
-  const jumpToSubtitle = (subtitle) => {
-    if (videoRef.current) {
-      const startTime = timeToSeconds(subtitle.start);
-      videoRef.current.currentTime = startTime;
-      setCurrentTime(startTime);
-    }
-  };
-
-  const selectSubtitleForEdit = (subtitle, index) => {
-    setSelectedSubtitleIndex(index);
-    setEditForm({
-      start: subtitle.start,
-      end: subtitle.end,
-      text: subtitle.text,
-    });
-    jumpToSubtitle(subtitle);
-  };
-
-  const handleFormChange = (field, value) => {
-    setEditForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
-
-  const handleSaveChanges = () => {
-    if (selectedSubtitleIndex === -1) {
-      alert("Please select a subtitle to edit");
-      return;
-    }
-
-    if (!editForm.start || !editForm.end || !editForm.text.trim()) {
-      alert("Please fill in all fields");
-      return;
-    }
-
-    const timeRegex = /^\d{2}:\d{2}:\d{2}[,\.]\d{3}$/;
-    if (!timeRegex.test(editForm.start) || !timeRegex.test(editForm.end)) {
-      alert("Please use correct timestamp format: HH:MM:SS,mmm");
-      return;
-    }
-
-    const updatedSrtData = [...srtData];
-    updatedSrtData[selectedSubtitleIndex] = {
-      ...updatedSrtData[selectedSubtitleIndex],
-      start: editForm.start,
-      end: editForm.end,
-      text: editForm.text.trim(),
-    };
-
-    setSrtData(updatedSrtData);
-    alert("Subtitle updated successfully!");
-  };
-
-  const formatTimeForDisplay = (timeStr) => {
-    if (!timeStr) return "";
-    const seconds = timeToSeconds(timeStr);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-  };
 
   useEffect(() => {
     return () => {
@@ -859,9 +1082,6 @@ function App() {
     editedBy: `editor_${(i % 5) + 1}`,
     createdAt: new Date(Date.now() - i * 86400000).toLocaleDateString("en-US"),
   }));
-
-  const [currentPage, setCurrentPage] = useState(1);
-  const rowsPerPage = 5;
 
   const totalPages = Math.ceil(data.length / rowsPerPage);
   const startIndex = (currentPage - 1) * rowsPerPage;
@@ -963,7 +1183,7 @@ function App() {
               </div>
             )}
 
-            <div className="bg-gradient-to-r from-amber-400 to-amber-500 h-32 rounded-xl mt-4 flex items-center relative overflow-hidden">
+            <div className="bg-gradient-to-r from-amber-400 to-amber-500 h-36 rounded-xl mt-4 flex items-center relative overflow-hidden">
               {videoUrl ? (
                 <>
                   <div className="absolute inset-0 bg-black bg-opacity-20"></div>
@@ -972,6 +1192,9 @@ function App() {
                       <h3 className="text-black font-semibold text-sm">
                         Audio Waveform with Subtitle Regions
                       </h3>
+                      <div className="text-xs text-black opacity-80">
+                        Zoom: {zoomLevel.toFixed(1)}x
+                      </div>
                     </div>
 
                     <div className="w-full bg-black bg-opacity-30 rounded h-16 relative">
@@ -1003,19 +1226,7 @@ function App() {
                       )}
                     </div>
 
-                    <div className="mt-2 text-xs text-black opacity-80">
-                      {srtData.length > 0 && (
-                        <span>
-                          {srtData.length} subtitle regions loaded • Click
-                          waveform to seek •
-                          {activeSubtitleIndex !== -1 && (
-                            <span className="font-medium">
-                              Currently playing: #{activeSubtitleIndex + 1}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </div>
+                    {renderScrollControls()}
                   </div>
                 </>
               ) : (
