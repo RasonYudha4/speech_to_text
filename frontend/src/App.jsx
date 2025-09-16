@@ -833,8 +833,6 @@ function App() {
     setUploadSuccess(false);
     setUploadProgress(0);
 
-    // simulateTranscription();
-
     const formData = new FormData();
     formData.append("audio", file);
 
