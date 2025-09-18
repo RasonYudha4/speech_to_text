@@ -5,8 +5,8 @@ export const ENDPOINTS = {
     VERIFY: '/verify',
   },
   SRT: {
-    SUBTITLES: '/subtitles',
-    SUBTITLE_BY_FILENAME: (filename) => `/subtitles/${filename}`,
-    SUBTITLE_BY_SEQUENCE: (sequenceNumber) => `/subtitles/${sequenceNumber}`,
+    SUBTITLES: '/srt/subtitles',
+    SUBTITLE_BY_FILENAME: (filename) => `/srt/subtitles/${filename}`,
+    SUBTITLE_BY_SEQUENCE: (sequenceNumber) => `/srt/subtitles/${sequenceNumber}`,
   }
 };

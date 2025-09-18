@@ -25,9 +25,14 @@ module.exports = {
     });
 
     await queryInterface.createTable('subtitles', {
-      sequence_number: {
+      id: {
         type: Sequelize.INTEGER,
         primaryKey: true,
+        autoIncrement: true,
+        allowNull: false
+      },
+      sequence_number: {
+        type: Sequelize.INTEGER,
         allowNull: false
       },
       srt_id: {
@@ -55,15 +60,9 @@ module.exports = {
     });
 
     await queryInterface.addConstraint('subtitles', {
-      fields: ['srt_id'],
-      type: 'foreign key',
-      name: 'fk_subtitles_srt_id',
-      references: {
-        table: 'srts',
-        field: 'id'
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'CASCADE'
+      fields: ['srt_id', 'sequence_number'],
+      type: 'unique',
+      name: 'unique_srt_sequence'
     });
 
     await queryInterface.addIndex('subtitles', ['srt_id'], {
@@ -72,8 +71,8 @@ module.exports = {
   },
 
   down: async (queryInterface, Sequelize) => {
-    await queryInterface.removeConstraint('subtitles', 'fk_subtitles_srt_id');
-    
+    await queryInterface.removeConstraint('subtitles', 'unique_srt_sequence');
+    await queryInterface.removeIndex('subtitles', 'idx_subtitles_srt_id');
     await queryInterface.dropTable('subtitles');
     await queryInterface.dropTable('srts');
   }

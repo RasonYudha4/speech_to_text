@@ -1,8 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import LogoutButton from "../components/LogoutButton"
+import { useSrt } from "../hooks/useSrt";
+import { useAuth } from "../hooks/useAuth";
+import LogoutButton from "../components/LogoutButton";
 import axios from "axios";
 
 function Dashboard() {
+  const { user } = useAuth();
+  console.log("User : ", user);
   // =============================================================================
   // MEDIA FILES STATE
   // =============================================================================
@@ -15,6 +19,7 @@ function Dashboard() {
   // =============================================================================
   const [srtData, setSrtData] = useState([]);
   const [generatedTranscription, setGeneratedTranscription] = useState("");
+  const [currentFilename, setCurrentFilename] = useState("");
 
   // =============================================================================
   // VIDEO PLAYBACK STATE
@@ -27,6 +32,16 @@ function Dashboard() {
   // =============================================================================
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState(-1);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(-1);
+  const [fileStatus, setFileStatus] = useState("new");
+  const {
+    subtitles,
+    saveSubtitles,
+    refetch,
+    editSubtitle,
+    loading,
+    saving,
+    error: saveError,
+  } = useSrt(currentFilename);
   const [editForm, setEditForm] = useState({
     start: "",
     end: "",
@@ -571,7 +586,7 @@ function Dashboard() {
 
     const mouseTime =
       visibleStartTime + (mouseX / canvasWidth) * visibleDuration;
-    const edgeThreshold = (visibleDuration / canvasWidth) * 8; // 8 pixels threshold
+    const edgeThreshold = (visibleDuration / canvasWidth) * 8;
 
     for (let i = 0; i < srtData.length; i++) {
       const subtitle = srtData[i];
@@ -623,7 +638,7 @@ function Dashboard() {
     }));
   };
 
-  const handleSaveChanges = () => {
+  const handleSaveChanges = async () => {
     if (selectedSubtitleIndex === -1) {
       alert("Please select a subtitle to edit");
       return;
@@ -631,6 +646,35 @@ function Dashboard() {
 
     if (!validateSubtitleForm()) return;
 
+    try {
+      const existingSubtitles = await refetch(currentFilename);
+
+      if (!existingSubtitles || existingSubtitles.length === 0) {
+        // SCENARIO 1: File doesn't exist in database - save entire file
+        console.log("File saved");
+        await handleFirstTimeSave();
+      } else {
+        // SCENARIO 2: File exists - edit individual subtitle
+        console.log("File edit");
+        await handleIndividualEdit();
+      }
+    } catch (error) {
+      // If getSubtitles throws an error (e.g., 404), treat as new file
+      if (error.status === 404 || error.message.includes("not found")) {
+        try {
+          await handleFirstTimeSave();
+        } catch (saveError) {
+          alert(`Failed to save: ${saveError.message}`);
+        }
+      } else {
+        alert(`Failed to save: ${error.message}`);
+      }
+    }
+  };
+
+  // Handle first-time save of entire file
+  const handleFirstTimeSave = async () => {
+    // Update local state first
     const updatedSrtData = [...srtData];
     updatedSrtData[selectedSubtitleIndex] = {
       ...updatedSrtData[selectedSubtitleIndex],
@@ -638,9 +682,83 @@ function Dashboard() {
       end: editForm.end,
       text: editForm.text.trim(),
     };
-
     setSrtData(updatedSrtData);
-    alert("Subtitle updated successfully!");
+
+    // Convert to backend format for saving
+    const backendFormattedSubtitles = updatedSrtData.map((subtitle) => ({
+      sequence_number: subtitle.id,
+      start_time: subtitle.start,
+      end_time: subtitle.end,
+      text: subtitle.text,
+    }));
+
+    // Save entire file to server
+    const srtPayload = {
+      filename: currentFilename,
+      subtitles: backendFormattedSubtitles,
+    };
+
+    await saveSubtitles(srtPayload);
+    setFileStatus("saved"); // Update status after successful save
+    alert(
+      "File saved successfully! Future edits will update individual subtitles."
+    );
+  };
+
+  // Handle individual subtitle edit
+  const handleIndividualEdit = async () => {
+    const currentSubtitle = srtData[selectedSubtitleIndex];
+
+    const updateData = {
+      start_time: editForm.start,
+      end_time: editForm.end,
+      text: editForm.text.trim(),
+    };
+
+    // Check if srt_id exists
+    if (!currentSubtitle.srt_id) {
+      console.error("ERROR: srt_id is missing from currentSubtitle!");
+      console.log("Available properties:", Object.keys(currentSubtitle));
+
+      // If srt_id is missing, you might need to get it from context
+      // For now, let's see what properties are available
+      alert("Error: SRT ID is missing. Check console for details.");
+      return;
+    }
+
+    if (!currentSubtitle.sequence_number) {
+      console.error("ERROR: sequence_number is missing from currentSubtitle!");
+      alert("Error: Sequence number is missing. Check console for details.");
+      return;
+    }
+
+    try {
+      // Use the hook's editSubtitle function with correct parameters
+      await editSubtitle(
+        currentSubtitle.sequence_number, // sequence_number from subtitle
+        currentSubtitle.srt_id, // srt_id (parent SRT file ID)
+        updateData,
+        user.id
+      );
+
+      // Update local state to match
+      const updatedSrtData = [...srtData];
+      updatedSrtData[selectedSubtitleIndex] = {
+        ...currentSubtitle,
+        start_time: editForm.start,
+        end_time: editForm.end,
+        text: editForm.text.trim(),
+        // If your local state uses different property names, map them:
+        start: editForm.start,
+        end: editForm.end,
+      };
+      setSrtData(updatedSrtData);
+
+      alert("Subtitle updated successfully!");
+    } catch (error) {
+      console.error("Failed to update subtitle:", error);
+      alert("Failed to update subtitle. Please try again.");
+    }
   };
 
   const validateSubtitleForm = () => {
@@ -739,7 +857,11 @@ function Dashboard() {
   const handleSRTFileInput = (e) => {
     const file = e.target.files[0];
     if (file && file.name.toLowerCase().endsWith(".srt")) {
+      const filename = file.name.replace(/\.srt$/i, "");
+      console.log("File name ", filename);
+      setCurrentFilename(filename);
       processSRTFile(file);
+      setFileStatus("new");
     }
   };
 
@@ -753,7 +875,10 @@ function Dashboard() {
     );
 
     if (srtFile) {
+      const filename = srtFile.name;
+      setCurrentFilename(filename);
       processSRTFile(srtFile);
+      setFileStatus("new");
     } else {
       alert("Please upload a valid .srt file");
     }
@@ -1074,6 +1199,15 @@ function Dashboard() {
     };
   }, [videoUrl]);
 
+  useEffect(() => {
+    if (subtitles && subtitles.length > 0) {
+      setFileStatus("saved");
+      setSrtData(subtitles); // Sync with server data
+    } else if (srtData.length > 0 && subtitles.length === 0) {
+      setFileStatus("new");
+    }
+  }, [subtitles, srtData.length]);
+
   const data = Array.from({ length: 23 }, (_, i) => ({
     id: i + 1,
     filename: `subtitle_file_${i + 1}.srt`,
@@ -1348,7 +1482,7 @@ function Dashboard() {
                         title="Click to select and edit this subtitle"
                       >
                         <div className="p-2 text-xs text-gray-600 border-r border-gray-200 flex items-center justify-center font-mono">
-                          {String(item.id).padStart(2, "0")}
+                          {String(item.sequence_number).padStart(2, "0")}
                         </div>
                         <div className="p-2 text-xs text-gray-800 border-r border-gray-200 flex items-center justify-center font-mono">
                           {item.start}
@@ -1451,7 +1585,13 @@ function Dashboard() {
                   onClick={handleSaveChanges}
                   className="px-6 py-2 bg-[#14203C] hover:bg-[#0d245c] hover:cursor-pointer text-white font-semibold rounded transition-colors"
                 >
-                  Save Changes
+                  {fileStatus === "new"
+                    ? saving
+                      ? "Saving Changes..."
+                      : "Save Changes"
+                    : saving
+                    ? "Updating..."
+                    : "Update Subtitle"}
                 </button>
                 <button
                   onClick={() => {

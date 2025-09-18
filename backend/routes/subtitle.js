@@ -11,7 +11,7 @@ router.post('/subtitles', authMiddleware, subtitleController.saveSubtitles);
 router.get('/subtitles/:filename', authMiddleware, subtitleController.getSubtitles);
 
 // Edit a single subtitle by sequence number
-router.put('/subtitles/:sequence_number', authMiddleware    , subtitleController.editSubtitle);
+router.put('/subtitles/:subtitle_id', authMiddleware, subtitleController.editSubtitle);
 
 // Delete a single subtitle by sequence number
 router.delete('/subtitles/:sequence_number', authMiddleware, subtitleController.deleteSubtitle);

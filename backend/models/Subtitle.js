@@ -2,9 +2,14 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
 const Subtitle = sequelize.define('Subtitle', {
-  sequence_number: {
+  id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
+    autoIncrement: true
+  },
+  sequence_number: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
     validate: {
       min: 1
     }
@@ -42,7 +47,13 @@ const Subtitle = sequelize.define('Subtitle', {
   }
 }, {
   tableName: 'subtitles',
-  timestamps: false
+  timestamps: false,
+  indexes: [
+    {
+      unique: true,
+      fields: ['srt_id', 'sequence_number']
+    }
+  ]
 });
 
 module.exports = Subtitle;
