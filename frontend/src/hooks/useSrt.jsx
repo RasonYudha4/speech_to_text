@@ -3,19 +3,18 @@ import { srtService } from "../api/services/srt";
 
 // Main hook for SRT operations
 export const useSrt = (filename) => {
-  const [subtitles, setSubtitles] = useState([]); // Initialize as empty array
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [subtitles, setSubtitles] = useState([]); 
+  const [srtLoading, setSrtLoading] = useState(false);
+  const [srtError, setSrtError] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const fetchSubtitles = useCallback(async () => {
     if (!filename) return [];
 
     try {
-      setLoading(true);
-      setError(null);
+      setSrtLoading(true);
+      setSrtError(null);
       const response = await srtService.getSubtitles(filename);
-      // Extract the subtitles array from the nested response
       let subtitlesArray = [];
 
       if (
@@ -39,11 +38,11 @@ export const useSrt = (filename) => {
       setSubtitles(subtitlesArray);
       return subtitlesArray;
     } catch (err) {
-      setError(err.message || "Failed to fetch subtitles");
+      setSrtError(err.message || "Failed to fetch subtitles");
       setSubtitles([]);
       throw err;
     } finally {
-      setLoading(false);
+      setSrtLoading(false);
     }
   }, [filename]);
 
@@ -51,7 +50,7 @@ export const useSrt = (filename) => {
   const saveSubtitles = useCallback(async (srtData) => {
     try {
       setSaving(true);
-      setError(null);
+      setSrtError(null);
       const response = await srtService.saveSubtitles(srtData);
 
       console.log("response : ", response);
@@ -74,7 +73,7 @@ export const useSrt = (filename) => {
       setSubtitles(subtitlesArray);
       return subtitlesArray;
     } catch (err) {
-      setError(err.message || "Failed to save subtitles");
+      setSrtError(err.message || "Failed to save subtitles");
       throw err;
     } finally {
       setSaving(false);
@@ -85,7 +84,7 @@ export const useSrt = (filename) => {
   const editSubtitle = useCallback(
     async (sequenceNumber, srtId, updateData, userId) => {
       try {
-        setError(null);
+        setSrtError(null);
 
         // Optimistic update using sequence_number
         setSubtitles((prev) => {
@@ -137,7 +136,7 @@ export const useSrt = (filename) => {
         return response.data;
       } catch (err) {
 
-        setError(
+        setSrtError(
           err.response?.data?.message ||
             err.message ||
             "Failed to edit subtitle"
@@ -152,7 +151,7 @@ export const useSrt = (filename) => {
   const deleteSubtitle = useCallback(
     async (sequenceNumber, editedBy) => {
       try {
-        setError(null);
+        setSrtError(null);
 
         // Store original state for rollback
         const originalSubtitles = Array.isArray(subtitles) ? subtitles : [];
@@ -170,9 +169,9 @@ export const useSrt = (filename) => {
         // Success - keep the optimistic update
         return true;
       } catch (err) {
-        setError(err.message || "Failed to delete subtitle");
+        setSrtError(err.message || "Failed to delete subtitle");
 
-        // Revert optimistic update on error
+        // Revert optimistic update on srtError
         setSubtitles(originalSubtitles);
         throw err;
       }
@@ -188,9 +187,9 @@ export const useSrt = (filename) => {
   return {
     // State
     subtitles: Array.isArray(subtitles) ? subtitles : [],
-    loading,
+    srtLoading,
     saving,
-    error,
+    srtError,
 
     // Actions
     saveSubtitles,
@@ -201,6 +200,6 @@ export const useSrt = (filename) => {
     // Computed values
     subtitleCount: Array.isArray(subtitles) ? subtitles.length : 0,
     isEmpty: !Array.isArray(subtitles) || subtitles.length === 0,
-    hasError: !!error,
+    hassrtError: !!srtError,
   };
 };

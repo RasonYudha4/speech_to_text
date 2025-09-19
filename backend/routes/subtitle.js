@@ -4,6 +4,9 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
+// Get all SRT files with pagination and search
+router.get('/srts', authMiddleware, subtitleController.getAllSrts);
+
 // Save/Update entire SRT file with subtitles
 router.post('/subtitles', authMiddleware, subtitleController.saveSubtitles);
 

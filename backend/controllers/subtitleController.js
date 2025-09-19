@@ -6,6 +6,83 @@ const sequelize = require("../config/database");
 require("../models/Association");
 
 const subtitleController = {
+  async getAllSrts(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          errors: errors.array(),
+        });
+      }
+
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const offset = (page - 1) * limit;
+      const search = req.query.search || "";
+      const sortBy = req.query.sortBy || "updated_at";
+      const sortOrder = req.query.sortOrder || "DESC";
+
+      const whereClause = {};
+      if (search) {
+        whereClause.filename = {
+          [sequelize.Op.iLike]: `%${search}%`,
+        };
+      }
+
+      const { count, rows: srts } = await Srt.findAndCountAll({
+        where: whereClause,
+        include: [
+          {
+            model: Subtitle,
+            as: "subtitles",
+            required: false,
+            attributes: [
+              "id",
+              "sequence_number",
+              "srt_id",
+              "start_time",
+              "end_time",
+              "text",
+            ],
+          },
+        ],
+        order: [[sortBy, sortOrder]],
+        limit: limit,
+        offset: offset,
+        distinct: true,
+      });
+
+      const totalPages = Math.ceil(count / limit);
+      const hasNextPage = page < totalPages;
+      const hasPrevPage = page > 1;
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          srts: srts,
+          pagination: {
+            currentPage: page,
+            totalPages: totalPages,
+            totalItems: count,
+            itemsPerPage: limit,
+            hasNextPage: hasNextPage,
+            hasPrevPage: hasPrevPage,
+          },
+        },
+        message: `Successfully retrieved ${srts.length} SRT files`,
+      });
+    } catch (error) {
+      console.error("Error fetching SRTs:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error while fetching SRT files",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  },
+
   async saveSubtitles(req, res) {
     const transaction = await sequelize.transaction();
 
@@ -145,7 +222,8 @@ const subtitleController = {
         });
       }
 
-      const { start_time, end_time, text, userId, srt_id, sequence_number } = req.body;
+      const { start_time, end_time, text, userId, srt_id, sequence_number } =
+        req.body;
 
       console.log("edited by : ", userId);
 
@@ -271,14 +349,17 @@ const subtitleController = {
       });
 
       if (!srt) {
-        return res.status(404).json({
-          success: false,
-          message: "SRT file not found",
+        console.log("Not exist")
+        return res.status(200).json({
+          success: true,
+          exists: false,
+          data: null,
         });
       }
 
       res.status(200).json({
         success: true,
+        exists: true,
         data: srt,
       });
     } catch (error) {

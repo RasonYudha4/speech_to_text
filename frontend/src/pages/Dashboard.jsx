@@ -1,12 +1,13 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useSrt } from "../hooks/useSrt";
 import { useAuth } from "../hooks/useAuth";
+import { useMultipleUsers } from "../hooks/useMultipleUser";
+import { useAllSrts } from "../hooks/useAllSrts";
 import LogoutButton from "../components/LogoutButton";
 import axios from "axios";
 
 function Dashboard() {
   const { user } = useAuth();
-  console.log("User : ", user);
   // =============================================================================
   // MEDIA FILES STATE
   // =============================================================================
@@ -33,15 +34,36 @@ function Dashboard() {
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState(-1);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(-1);
   const [fileStatus, setFileStatus] = useState("new");
+
   const {
     subtitles,
     saveSubtitles,
     refetch,
     editSubtitle,
-    loading,
+    srtLoading,
     saving,
-    error: saveError,
+    srtError,
   } = useSrt(currentFilename);
+
+  const {
+    srts,
+    pagination,
+    srtsLoading,
+    srtsError,
+    fetchAllSrts,
+    goToPage,
+    nextPage,
+    prevPage,
+    searchSrts,
+  } = useAllSrts();
+
+  const userIds = useMemo(
+    () => srts.map((srt) => srt.edited_by).filter((id) => id),
+    [srts]
+  );
+
+  const { getUserName } = useMultipleUsers(userIds);
+
   const [editForm, setEditForm] = useState({
     start: "",
     end: "",
@@ -518,9 +540,17 @@ function Dashboard() {
   // ============================================================================
 
   const timeToSeconds = (timeStr) => {
-    const [time, ms] = timeStr.split(/[,\.]/);
-    const [hours, minutes, seconds] = time.split(":").map(Number);
-    return hours * 3600 + minutes * 60 + seconds + parseInt(ms) / 1000;
+    if (!timeStr || typeof timeStr !== "string") {
+      console.warn("Invalid time passed to timeToSeconds:", timeStr);
+      return null;
+    }
+
+    const [timePart, ms] = timeStr.split(/[,\.]/);
+    const [hours, minutes, seconds] = timePart.split(":").map(Number);
+
+    return (
+      hours * 3600 + minutes * 60 + seconds + (ms ? parseInt(ms) / 1000 : 0)
+    );
   };
 
   const secondsToSRTTime = (seconds) => {
@@ -659,7 +689,6 @@ function Dashboard() {
         await handleIndividualEdit();
       }
     } catch (error) {
-      // If getSubtitles throws an error (e.g., 404), treat as new file
       if (error.status === 404 || error.message.includes("not found")) {
         try {
           await handleFirstTimeSave();
@@ -669,6 +698,48 @@ function Dashboard() {
       } else {
         alert(`Failed to save: ${error.message}`);
       }
+    }
+  };
+
+  const handleRowClick = async (item) => {
+    try {
+      // Update filename state to trigger the fetch
+      setCurrentFilename(item.filename);
+
+      // Call the fetch function directly with the filename
+      const response = await refetch(item.filename);
+      let subtitlesArray = [];
+
+      if (
+        response &&
+        response.success &&
+        response.data &&
+        response.data.subtitles
+      ) {
+        const rawSubtitles = response.data.subtitles;
+
+        // Map to the format expected by srtData
+        subtitlesArray = rawSubtitles.map((subtitle) => ({
+          id: subtitle.sequence_number,
+          start: subtitle.start_time,
+          end: subtitle.end_time,
+          text: subtitle.text,
+          srt_id: subtitle.srt_id,
+        }));
+      } else if (Array.isArray(response)) {
+        subtitlesArray = response;
+      }
+
+      // Update both states
+      setSrtData(subtitlesArray);
+
+      // Optional: Update current filename for other components
+      setCurrentFilename(item.filename);
+
+      console.log("Loaded subtitles for:", item.filename, subtitlesArray);
+    } catch (err) {
+      setSrtData([]); // Clear srtData on error
+      console.error("Error fetching subtitles:", err);
     }
   };
 
@@ -686,7 +757,7 @@ function Dashboard() {
 
     // Convert to backend format for saving
     const backendFormattedSubtitles = updatedSrtData.map((subtitle) => ({
-      sequence_number: subtitle.id,
+      sequence_number: subtitle.sequence_number,
       start_time: subtitle.start,
       end_time: subtitle.end,
       text: subtitle.text,
@@ -696,7 +767,10 @@ function Dashboard() {
     const srtPayload = {
       filename: currentFilename,
       subtitles: backendFormattedSubtitles,
+      edited_by: user.id,
     };
+
+    console.log("srtPayload : ", srtPayload);
 
     await saveSubtitles(srtPayload);
     setFileStatus("saved"); // Update status after successful save
@@ -720,8 +794,6 @@ function Dashboard() {
       console.error("ERROR: srt_id is missing from currentSubtitle!");
       console.log("Available properties:", Object.keys(currentSubtitle));
 
-      // If srt_id is missing, you might need to get it from context
-      // For now, let's see what properties are available
       alert("Error: SRT ID is missing. Check console for details.");
       return;
     }
@@ -815,7 +887,7 @@ function Dashboard() {
 
     if (timeMatch && text) {
       return {
-        id: id,
+        sequence_number: id,
         start: timeMatch[1].replace(".", ","),
         end: timeMatch[2].replace(".", ","),
         text: text,
@@ -1101,6 +1173,18 @@ function Dashboard() {
   // ============================================================================
 
   useEffect(() => {
+    console.log("🔄 srtData updated:", {
+      length: srtData.length,
+      hasValidData: srtData.length > 0 && srtData[0] && srtData[0].start,
+      firstItem: srtData[0],
+      timestamp: new Date().toISOString().split("T")[0],
+    });
+
+    // Add stack trace to see what's causing the update
+    console.trace("srtData update source");
+  }, [srtData]);
+
+  useEffect(() => {
     if (videoRef.current && videoUrl) {
       const video = videoRef.current;
 
@@ -1182,11 +1266,22 @@ function Dashboard() {
   useEffect(() => {
     if (srtData.length === 0) return;
 
-    const activeIndex = srtData.findIndex((subtitle) => {
+    let activeIndex = -1;
+
+    for (let i = 0; i < srtData.length; i++) {
+      const subtitle = srtData[i];
+
+      // Skip invalid items but keep original index
+      if (!subtitle || !subtitle.start || !subtitle.end) continue;
+
       const startTime = timeToSeconds(subtitle.start);
       const endTime = timeToSeconds(subtitle.end);
-      return currentTime >= startTime && currentTime <= endTime;
-    });
+
+      if (currentTime >= startTime && currentTime <= endTime) {
+        activeIndex = i; // Use original index
+        break;
+      }
+    }
 
     setActiveSubtitleIndex(activeIndex);
   }, [currentTime, srtData]);
@@ -1202,18 +1297,23 @@ function Dashboard() {
   useEffect(() => {
     if (subtitles && subtitles.length > 0) {
       setFileStatus("saved");
-      setSrtData(subtitles); // Sync with server data
     } else if (srtData.length > 0 && subtitles.length === 0) {
       setFileStatus("new");
     }
   }, [subtitles, srtData.length]);
 
-  const data = Array.from({ length: 23 }, (_, i) => ({
-    id: i + 1,
-    filename: `subtitle_file_${i + 1}.srt`,
-    editedBy: `editor_${(i % 5) + 1}`,
-    createdAt: new Date(Date.now() - i * 86400000).toLocaleDateString("en-US"),
-  }));
+  useEffect(() => {
+    fetchAllSrts();
+  }, [fetchAllSrts]);
+
+  const data = useMemo(() => {
+    return srts.map((srt) => ({
+      id: srt.id || srt._id,
+      filename: srt.filename,
+      editedBy: getUserName(srt.edited_by),
+      createdAt: srt.updated_at,
+    }));
+  }, [srts, getUserName]);
 
   const totalPages = Math.ceil(data.length / rowsPerPage);
   const startIndex = (currentPage - 1) * rowsPerPage;
@@ -1466,7 +1566,7 @@ function Dashboard() {
                   <>
                     {srtData.map((item, index) => (
                       <div
-                        key={`${item.id}-${index}`}
+                        key={`${item.sequence_number}-${index}`}
                         className={`grid grid-cols-4 border-b border-gray-100 hover:bg-blue-50 transition-colors duration-150 cursor-pointer ${
                           index % 2 === 0 ? "bg-white" : "bg-gray-50"
                         } ${
@@ -1482,7 +1582,7 @@ function Dashboard() {
                         title="Click to select and edit this subtitle"
                       >
                         <div className="p-2 text-xs text-gray-600 border-r border-gray-200 flex items-center justify-center font-mono">
-                          {String(item.sequence_number).padStart(2, "0")}
+                          {item.sequence_number}
                         </div>
                         <div className="p-2 text-xs text-gray-800 border-r border-gray-200 flex items-center justify-center font-mono">
                           {item.start}
@@ -1637,6 +1737,7 @@ function Dashboard() {
                       <tr
                         key={item.id}
                         className="hover:bg-[#7686ad] hover:cursor-pointer"
+                        onClick={() => handleRowClick(item)}
                       >
                         <td className="p-3 border-b text-center">{item.id}</td>
 

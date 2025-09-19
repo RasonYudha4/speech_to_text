@@ -2,6 +2,25 @@ import { apiClient } from "../client";
 import { ENDPOINTS } from "../endpoints";
 
 export const srtService = {
+  // Get all SRTs
+  getAllSrts: async (params = {}) => {
+    const { page, limit, search, sortBy, sortOrder } = params;
+    
+    // Build query string
+    const queryParams = new URLSearchParams();
+    if (page) queryParams.append('page', page);
+    if (limit) queryParams.append('limit', limit);
+    if (search) queryParams.append('search', search);
+    if (sortBy) queryParams.append('sortBy', sortBy);
+    if (sortOrder) queryParams.append('sortOrder', sortOrder);
+    
+    const queryString = queryParams.toString();
+    const url = queryString ? `${ENDPOINTS.SRT.SRTS}?${queryString}` : ENDPOINTS.SRT.SRTS;
+    
+    const response = await apiClient.get(url);
+    return response.data;
+  },
+
   // Save/Update entire SRT file with subtitles
   saveSubtitles: async (srtData) => {
     const response = await apiClient.post(ENDPOINTS.SRT.SUBTITLES, srtData);
@@ -18,12 +37,6 @@ export const srtService = {
 
   // Edit single subtitle
   editSubtitle: async (sequenceNumber, srtId, updateData, userId) => {
-    console.log("=== SERVICE EDIT SUBTITLE DEBUG ===");
-    console.log("sequenceNumber:", sequenceNumber);
-    console.log("srtId:", srtId);
-    console.log("updateData:", updateData);
-    console.log("User ID : ", userId)
-
     const url = ENDPOINTS.SRT.SUBTITLE_BY_SEQUENCE(sequenceNumber);
     console.log("Request URL:", url);
 

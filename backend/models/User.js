@@ -21,15 +21,27 @@ const User = sequelize.define('User', {
       notEmpty: true
     }
   },
-  
   password: {
     type: DataTypes.STRING,
-    allowNull: false,
-    validate: {
-      len: [6, 100]
-    }
-  }
-}, {
+    allowNull: true,
+  },
+  provider: {
+      type: DataTypes.STRING, 
+      allowNull: false,
+      defaultValue: 'local',
+    },
+    providerId: {
+      type: DataTypes.STRING, 
+      allowNull: true,
+      unique: true,
+    },
+},
+{
+    tableName: 'users',      
+    freezeTableName: true,   
+    timestamps: true,        
+  },
+ {
   hooks: {
     beforeCreate: async (user) => {
       user.password = await bcrypt.hash(user.password, 12);
