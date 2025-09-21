@@ -3,6 +3,17 @@ import { useSrt } from "../hooks/useSrt";
 import { useAuth } from "../hooks/useAuth";
 import { useMultipleUsers } from "../hooks/useMultipleUser";
 import { useAllSrts } from "../hooks/useAllSrts";
+
+import {
+  timeToSeconds,
+  secondsToSRTTime,
+  formatTimeForDisplay,
+} from "../utils/timeUtils";
+import {
+  getTimeConstraints,
+  getRegionEdgeHover,
+} from "../utils/subtitlesUtils";
+
 import LogoutButton from "../components/LogoutButton";
 import axios from "axios";
 
@@ -308,14 +319,26 @@ function Dashboard() {
     if (isDragging && dragInfo.subtitleIndex !== -1) {
       handleSubtitleDrag(mouseX, rect.width);
     } else {
-      const hoverInfo = getRegionEdgeHover(mouseX, rect.width);
+      const hoverInfo = getRegionEdgeHover({
+        mouseX,
+        canvasWidth: rect.width,
+        videoDuration: videoRef.current.duration,
+        waveformData,
+        zoomLevel,
+        zoomCenter,
+        subtitles: srtData,
+      });
       setHoveredRegion(hoverInfo);
     }
   };
 
   const handleSubtitleDrag = (mouseX, canvasWidth) => {
     const currentMouseTime = calculateMouseTime(mouseX, canvasWidth);
-    const constraints = getTimeConstraints(dragInfo.subtitleIndex);
+    const constraints = getTimeConstraints(
+      dragInfo.subtitleIndex,
+      srtData,
+      videoRef.current?.duration
+    );
     const updatedSrtData = [...srtData];
     const subtitle = updatedSrtData[dragInfo.subtitleIndex];
 
@@ -368,7 +391,16 @@ function Dashboard() {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
-    const hoverInfo = getRegionEdgeHover(mouseX, rect.width);
+
+    const hoverInfo = getRegionEdgeHover({
+      mouseX,
+      canvasWidth: rect.width,
+      videoDuration: videoRef.current.duration,
+      waveformData,
+      zoomLevel,
+      zoomCenter,
+      subtitles: srtData,
+    });
 
     if (hoverInfo.subtitleIndex !== -1) {
       setIsDragging(true);
@@ -401,15 +433,30 @@ function Dashboard() {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
 
+    const hoverInfo = getRegionEdgeHover({
+      mouseX: x,
+      canvasWidth: rect.width,
+      videoDuration: videoRef.current.duration,
+      waveformData,
+      zoomLevel,
+      zoomCenter,
+      subtitles: srtData,
+    });
+
     // Don't seek if clicking on an edge
-    const hoverInfo = getRegionEdgeHover(x, rect.width);
     if (hoverInfo.subtitleIndex !== -1) return;
 
-    const seekTime = calculateSeekTime(x, rect.width);
+    const seekTime = calculateSeekTime(
+      x,
+      rect.width,
+      waveformData,
+      zoomLevel,
+      zoomCenter,
+      videoRef.current.duration
+    );
     videoRef.current.currentTime = seekTime;
     setCurrentTime(seekTime);
 
-    // Check for subtitle selection
     checkSubtitleSelection(seekTime);
   };
 
@@ -533,110 +580,6 @@ function Dashboard() {
         </div>
       </div>
     );
-  };
-
-  // ============================================================================
-  // ⏱️ TIME & SUBTITLE UTILITIES
-  // ============================================================================
-
-  const timeToSeconds = (timeStr) => {
-    if (!timeStr || typeof timeStr !== "string") {
-      console.warn("Invalid time passed to timeToSeconds:", timeStr);
-      return null;
-    }
-
-    const [timePart, ms] = timeStr.split(/[,\.]/);
-    const [hours, minutes, seconds] = timePart.split(":").map(Number);
-
-    return (
-      hours * 3600 + minutes * 60 + seconds + (ms ? parseInt(ms) / 1000 : 0)
-    );
-  };
-
-  const secondsToSRTTime = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-
-    return `${hours.toString().padStart(2, "0")}:${minutes
-      .toString()
-      .padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms
-      .toString()
-      .padStart(3, "0")}`;
-  };
-
-  const formatTimeForDisplay = (timeStr) => {
-    if (!timeStr) return "";
-    const seconds = timeToSeconds(timeStr);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-  };
-
-  const getTimeConstraints = (subtitleIndex) => {
-    let minTime = 0;
-    let maxTime = videoRef.current?.duration || 0;
-
-    // Find previous subtitle end time as minimum constraint
-    for (let i = 0; i < srtData.length; i++) {
-      if (i < subtitleIndex) {
-        const endTime = timeToSeconds(srtData[i].end);
-        minTime = Math.max(minTime, endTime + 0.1); // 100ms minimum gap
-      }
-    }
-
-    // Find next subtitle start time as maximum constraint
-    for (let i = 0; i < srtData.length; i++) {
-      if (i > subtitleIndex) {
-        const startTime = timeToSeconds(srtData[i].start);
-        maxTime = Math.min(maxTime, startTime - 0.1); // 100ms minimum gap
-      }
-    }
-
-    return { minTime, maxTime };
-  };
-
-  const getRegionEdgeHover = (mouseX, canvasWidth) => {
-    if (!videoRef.current?.duration || srtData.length === 0) {
-      return { subtitleIndex: -1, edge: null };
-    }
-
-    const totalSamples = waveformData.length;
-    const visibleSamples = Math.floor(totalSamples / zoomLevel);
-    const startSample = Math.floor(
-      (totalSamples - visibleSamples) * zoomCenter
-    );
-    const endSample = Math.min(startSample + visibleSamples, totalSamples);
-
-    const videoDuration = videoRef.current.duration;
-    const visibleStartTime = (startSample / totalSamples) * videoDuration;
-    const visibleEndTime = (endSample / totalSamples) * videoDuration;
-    const visibleDuration = visibleEndTime - visibleStartTime;
-
-    const mouseTime =
-      visibleStartTime + (mouseX / canvasWidth) * visibleDuration;
-    const edgeThreshold = (visibleDuration / canvasWidth) * 8;
-
-    for (let i = 0; i < srtData.length; i++) {
-      const subtitle = srtData[i];
-      const startTime = timeToSeconds(subtitle.start);
-      const endTime = timeToSeconds(subtitle.end);
-
-      // Check if subtitle is visible
-      if (endTime >= visibleStartTime && startTime <= visibleEndTime) {
-        // Check start edge
-        if (Math.abs(mouseTime - startTime) <= edgeThreshold) {
-          return { subtitleIndex: i, edge: "start" };
-        }
-        // Check end edge
-        if (Math.abs(mouseTime - endTime) <= edgeThreshold) {
-          return { subtitleIndex: i, edge: "end" };
-        }
-      }
-    }
-
-    return { subtitleIndex: -1, edge: null };
   };
 
   // ============================================================================
@@ -1420,14 +1363,14 @@ function Dashboard() {
                     onChange={handleVideoFileInput}
                     className="hidden"
                   />
-                  <span className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-colors">
+                  <span className="inline-flex items-center px-4 py-2 bg-[#5f719b] hover:bg-[#415ea3] text-white text-sm font-medium rounded transition-colors">
                     Browse Videos
                   </span>
                 </label>
               </div>
             )}
 
-            <div className="bg-gradient-to-r from-amber-400 to-amber-500 h-36 rounded-xl mt-4 flex items-center relative overflow-hidden">
+            <div className="bg-gradient-to-r from-[#5f719b] to-[#415ea3] h-36 rounded-xl mt-4 flex items-center relative overflow-hidden">
               {videoUrl ? (
                 <>
                   <div className="absolute inset-0 bg-black bg-opacity-20"></div>
@@ -1511,14 +1454,14 @@ function Dashboard() {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
             >
-              <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white grid grid-cols-4 border-b border-gray-300 flex-shrink-0">
-                <div className="p-2 text-xs font-semibold border-r border-blue-500 flex items-center justify-center">
+              <div className="bg-[#415ea3] text-white grid grid-cols-4 border-b border-gray-300 flex-shrink-0">
+                <div className="p-2 text-xs font-semibold border-r border-[#5f719b] flex items-center justify-center">
                   No
                 </div>
-                <div className="p-2 text-xs font-semibold border-r border-blue-500 flex items-center justify-center">
+                <div className="p-2 text-xs font-semibold border-r border-[#5f719b] flex items-center justify-center">
                   Start
                 </div>
-                <div className="p-2 text-xs font-semibold border-r border-blue-500 flex items-center justify-center">
+                <div className="p-2 text-xs font-semibold border-r border-[#5f719b] flex items-center justify-center">
                   End
                 </div>
                 <div className="p-2 text-xs font-semibold flex items-center justify-center">
@@ -1557,7 +1500,7 @@ function Dashboard() {
                         onChange={handleSRTFileInput}
                         className="hidden"
                       />
-                      <span className="inline-flex items-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors">
+                      <span className="inline-flex items-center px-3 py-1.5 bg-[#5f719b] hover:bg-[#415ea3] text-white text-xs font-medium rounded transition-colors">
                         Browse Files
                       </span>
                     </label>
@@ -1743,9 +1686,9 @@ function Dashboard() {
 
                         <td className="p-3 border-b">
                           <div className="flex flex-col">
-                            <span className="font-semibold">
-                              {item.filename}
-                            </span>
+                            {item.filename.length > 25
+                              ? item.filename.slice(0, 25) + "..."
+                              : item.filename}
                             <span className="text-sm text-gray-200">
                               Edited by: {item.editedBy}
                             </span>
