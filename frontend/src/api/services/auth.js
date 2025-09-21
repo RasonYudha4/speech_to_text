@@ -15,5 +15,10 @@ export const authService = {
   verify: async () => {
     const response = await apiClient.get(ENDPOINTS.AUTH.VERIFY);
     return response.data;
+  },
+
+  google: async (credential) => {
+    const response = await apiClient.post(ENDPOINTS.AUTH.GOOGLE, { credential });
+    return response.data;
   }
 };

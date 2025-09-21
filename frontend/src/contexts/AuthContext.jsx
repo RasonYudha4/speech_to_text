@@ -80,12 +80,32 @@ export const AuthProvider = ({ children }) => {
     setIsAuthenticated(false);
   };
 
+  const googleLogin = async (credential) => {
+  try {
+    console.log("Sending credential to backend:", typeof credential);
+    
+    const response = await authService.google(credential)
+    
+    localStorage.setItem("authToken", response.token);
+    setUser(response.user);
+    setIsAuthenticated(true);
+    return { success: true };
+  } catch (err) {
+    console.error("Auth service error:", err);
+    return { 
+      success: false, 
+      error: err.response?.data?.message || err.message 
+    };
+  }
+};
+
   const value = {
     user,
     isAuthenticated,
     isLoading,
     login,
     register,
+    googleLogin,
     logout,
     verifyToken,
   };

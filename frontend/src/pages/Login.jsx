@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { Link, useNavigate } from 'react-router-dom';
-import SuccessModal from '../components/SuccessModal'; // Import the modal
+import { Link, useNavigate } from "react-router-dom";
+import SuccessModal from "../components/SuccessModal";
+import GoogleLoginButton from "../components/GoogleLoginButton";
 
 const Login = () => {
   const [credentials, setCredentials] = useState({ email: "", password: "" });
@@ -24,9 +25,9 @@ const Login = () => {
     } else {
       setShowSuccessModal(true);
       setIsLoading(false);
-      
+
       setTimeout(() => {
-        navigate('/', { replace: true });
+        navigate("/", { replace: true });
       }, 2000);
     }
   };
@@ -134,6 +135,12 @@ const Login = () => {
                 )}
               </button>
             </form>
+
+            <div className="my-6 text-center text-[#b5b3b3] opacity-70">
+              <span>or continue with</span>
+            </div>
+
+            <GoogleLoginButton />
 
             <div className="text-center pt-4">
               <p className="text-sm text-[#b5b3b3] opacity-60">

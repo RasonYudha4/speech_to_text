@@ -3,6 +3,7 @@ export const ENDPOINTS = {
     LOGIN: '/login',
     REGISTER: '/register',
     VERIFY: '/verify',
+    GOOGLE: '/google'
   },
   SRT: {
     SRTS: '/srt/srts',
